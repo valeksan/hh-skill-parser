@@ -55,3 +55,7 @@
 График показывает самые популярные навыки, извлечённые из вакансий:
 
 ![Пример графика навыков](hh_skills_bar_chart.png)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

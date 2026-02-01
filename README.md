@@ -14,7 +14,7 @@
 1. Клонируйте репозиторий:
 
    ```bash
-   git clone https://github.com/yourusername/hh-skills-parser.git
+   git clone https://github.com/valeksan/hh-skills-parser.git
    cd hh-skills-parser
    ```
 

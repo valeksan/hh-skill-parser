@@ -1,0 +1,57 @@
+python
+sql
+postgresql
+mysql
+git
+docker
+kubernetes
+tensorflow
+pytorch
+scikit-learn
+pandas
+numpy
+opencv
+nltk
+spacy
+bert
+transformers
+faiss
+elasticsearch
+airflow
+spark
+hadoop
+aws
+azure
+gcp
+linux
+bash
+c++
+java
+javascript
+react
+vue
+flask
+django
+fastapi
+ml
+dl
+ai
+computer vision
+natural language processing
+data analysis
+etl
+pipeline
+jupyter
+notebook
+latex
+graphql
+rest
+api
+json
+yaml
+protobuf
+onnx
+triton
+llm
+rag
+prompt engineering

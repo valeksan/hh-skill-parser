@@ -7,7 +7,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from bs4 import BeautifulSoup
 
-def get_vacancies(query, area=1, pages=5):
+TOP_N_SHOW = 50
+AREA = 1  # Moscow = 1
+
+def get_vacancies(query, area, pages=20):  # <-- 20 страниц максимально
     base_url = 'https://api.hh.ru/vacancies'
     params = {
         'text': query,
@@ -28,19 +31,25 @@ def get_vacancies(query, area=1, pages=5):
                 break
             all_vacancies.extend(items)
             print(f"Обработана страница {page_num + 1} по запросу '{query}'")
-            time.sleep(random.uniform(0.25, 0.5))
+            time.sleep(random.uniform(0.5, 1.0))  # <-- Больше задержка чтоб не палиться
         except requests.exceptions.RequestException as e:
             print(f"Ошибка при запросе: {e}")
             continue
     return all_vacancies
 
+
 def load_skills_whitelist(path="skills_whitelist.txt"):
     try:
         with open(path, encoding='utf-8') as f:
-            skills = [line.strip().lower() for line in f if line.strip()]
-        return set(skills)
+            lines = [
+                line.strip().lower()
+                for line in f
+                if line.strip() and not line.startswith('#')
+            ]
+        return set(lines)
+    
     except FileNotFoundError:
-        # Если файла нет — используем дефолтный список
+        # Возвращаем дефолтный список, если файла нет
         default_skills = {
             "python", "sql", "postgresql", "mysql", "git", "docker",
             "kubernetes", "tensorflow", "pytorch", "scikit-learn",
@@ -68,14 +77,26 @@ def extract_technical_skills(text):
             text_lower = text_lower.replace(skill, " ")
     return found_skills
 
+def load_queries(path="queries.txt"):
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = [
+                line.strip()
+                for line in f
+                if line.strip() and not line.startswith('#')
+            ]
+        return [q for q in lines if q]
+    except FileNotFoundError:
+        return ["DataScience", "Machine Learning", "ML Engineer", "Data Scientist", "AI Specialist"]  # fallback
+
 def main():
-    queries = ["DataScience", "Machine Learning", "ML Engineer", "Data Scientist", "AI Specialist"]
+    queries = load_queries()
     all_skills = []
     skill_counter = Counter()
 
     print("Начинаю сбор вакансий...")
     for q in queries:
-        vacancies = get_vacancies(q, pages=3)
+        vacancies = get_vacancies(q, area=AREA, pages=20)
         print(f"Найдено вакансий по '{q}': {len(vacancies)}")
         for v in vacancies:
             url = f'https://api.hh.ru/vacancies/{v["id"]}'
@@ -99,16 +120,23 @@ def main():
     # Сортировка
     sorted_skills = dict(sorted(skill_counter.items(), key=lambda x: x[1], reverse=True))
 
-    # Ограничим до топ-20 для графика
-    top_20 = dict(list(sorted_skills.items())[:20])
+    # Ограничим до топ-N для графика
+    top_n = dict(list(sorted_skills.items())[:TOP_N_SHOW])
 
-    print("\nТоп-20 навыков:")
-    for skill, count in top_20.items():
+    # Сохраним весь список в файл на диск
+    top_all = dict(list(sorted_skills.items()))
+    df_all = pd.DataFrame(list(top_all.items()), columns=['Count', 'Skill'])
+    df_all_filename = 'top_skills_all_data.csv'
+    df_all.to_csv(df_all_filename, index=False)
+    print(f"\nВесь отсортированный список сохранен в файл {df_all_filename}")
+
+    print(f"\nТоп-{TOP_N_SHOW} навыков:")
+    for skill, count in top_n.items():
         print(f"{skill}: {count}")
 
     # График
     # plt.figure(figsize=(12, 8))
-    # sns.barplot(x=list(top_20.values()), y=list(top_20.keys()), palette="viridis")
+    # sns.barplot(x=list(top_n.values()), y=list(top_n.keys()), palette="viridis")
     # plt.title("Частота упоминаний навыков в вакансиях (HH.ru)", fontsize=16)
     # plt.xlabel("Количество упоминаний", fontsize=14)
     # plt.ylabel("Навыки", fontsize=14)
@@ -117,8 +145,7 @@ def main():
     # print("\nГрафик сохранён как 'hh_skills_bar_chart.png'")
 
     # Построение графика
-    df = pd.DataFrame(list(top_20.items()), columns=['Count', 'Skill'])
-
+    df = pd.DataFrame(list(top_n.items()), columns=['Count', 'Skill'])
     plt.figure(figsize=(12, 8))
     sns.barplot(data=df, x='Count', y='Skill', palette="viridis", legend=False)
     plt.title("Частота упоминаний навыков в вакансиях (HH.ru)", fontsize=16)

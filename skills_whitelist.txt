@@ -1,57 +1,408 @@
+# Языки программирования
 python
+r
 sql
+scala
+julia
+
+# Базы данных
 postgresql
 mysql
+sqlite
+mongodb
+redis
+clickhouse
+cassandra
+oracle
+mssql
+snowflake
+databricks
+
+# Системы контроля версий
 git
+svn
+mercurial
+
+# Контейнеризация и оркестрация
 docker
 kubernetes
-tensorflow
-pytorch
-scikit-learn
+podman
+openshift
+helm
+
+# Обработка данных (Python)
 pandas
 numpy
-opencv
+polars
+dask
+pyarrow
+modin
+datatable
+
+# Визуализация
+matplotlib
+seaborn
+plotly
+bokeh
+altair
+ggplot
+geopandas
+folium
+holoviews
+
+# ML/DL библиотеки
+scikit-learn
+pytorch
+tensorflow
+keras
+xgboost
+lightgbm
+catboost
+optuna
+hyperopt
+ray
+mlflow
+wandb
+aim
+comet
+polyaxon
+huggingface transformers
+sentence-transformers
+faiss
+haystack
+langchain
+llamaindex
+openai
+anthropic
+vertex ai
+azure ml
+sagemaker
+
+# NLP
 nltk
 spacy
+gensim
+stanford corenlp
 bert
-transformers
-faiss
-elasticsearch
-airflow
-spark
-hadoop
-aws
-azure
-gcp
-linux
-bash
-c++
-java
-javascript
-react
-vue
-flask
-django
-fastapi
-ml
-dl
-ai
-computer vision
-natural language processing
-data analysis
-etl
-pipeline
-jupyter
-notebook
-latex
-graphql
-rest
-api
-json
-yaml
-protobuf
-onnx
-triton
+roberta
+gpt
+t5
 llm
 rag
 prompt engineering
+natural language processing
+text mining
+topic modeling
+word embeddings
+word2vec
+doc2vec
+tf-idf
+
+# Computer Vision
+opencv
+pillow
+scikit-image
+albumentations
+detectron2
+yolo
+segment anything
+image processing
+
+# Статистика и анализ
+scipy
+statsmodels
+pingouin
+arviz
+pymc3
+stan
+bayesian inference
+hypothesis testing
+anova
+regression
+clustering
+dimensionality reduction
+pca
+tsne
+umap
+
+# ETL / Pipelines
+airflow
+prefect
+luigi
+kedro
+dbt
+elt
+etl
+kafka
+rabbitmq
+celery
+apache beam
+dagster
+zenlytic
+
+# Big Data
+spark
+hadoop
+hive
+pig
+mapreduce
+databricks
+delta lake
+emr
+flink
+storm
+
+# Облачные платформы
+aws
+azure
+gcp
+snowflake
+databricks
+kaggle
+sagemaker
+lambda
+ec2
+s3
+glue
+emr
+bigquery
+vertex ai
+azure ml studio
+synapse
+cosmos db
+data factory
+storage account
+cloud functions
+app engine
+compute engine
+
+# Операционные системы / Shell
+linux
+bash
+shell scripting
+zsh
+powershell
+terminal
+command line
+
+# Языки и форматы данных
+json
+yaml
+xml
+csv
+parquet
+hdf5
+feather
+msgpack
+protobuf
+toml
+avro
+orc
+
+# API / Web
+api
+rest
+graphql
+soap
+web scraping
+selenium
+playwright
+requests
+fastapi
+flask
+django
+streamlit
+gradio
+dash
+aiohttp
+urllib
+oauth
+jwt
+
+# Математика
+linear algebra
+calculus
+statistics
+probability theory
+optimization
+gradient descent
+convex optimization
+
+# Машинное обучение
+ml
+dl
+ai
+machine learning
+deep learning
+artificial intelligence
+supervised learning
+unsupervised learning
+reinforcement learning
+semi-supervised learning
+active learning
+online learning
+transfer learning
+ensemble methods
+feature engineering
+feature selection
+cross-validation
+model selection
+hyperparameter tuning
+overfitting
+underfitting
+bias-variance tradeoff
+evaluation metrics
+accuracy
+precision
+recall
+f1 score
+auc
+roc
+confusion matrix
+model deployment
+model serving
+mlops
+model monitoring
+model drift
+ab testing
+canary release
+
+# Data Analysis
+data analysis
+data cleaning
+data preprocessing
+data wrangling
+data profiling
+data quality
+data validation
+data governance
+data lineage
+data catalog
+data ethics
+data privacy
+gdpr
+ccpa
+
+# BI / Визуализация данных
+tableau
+power bi
+looker
+metabase
+superset
+redash
+qlikview
+cognos
+microstrategy
+plotly dash
+streamlit
+
+# Прочие технологии
+jupyter
+notebook
+jupyterlab
+colab
+kaggle
+latex
+regex
+regexps
+vim
+emacs
+vscode
+pycharm
+anaconda
+miniconda
+virtual environment
+conda
+pip
+poetry
+pipenv
+pytest
+unittest
+mock
+logging
+debugging
+profiling
+memory management
+gpu
+cuda
+cuDNN
+tensorrt
+onnx
+triton
+openvino
+intel oneapi
+nvidia
+amd rocm
+tpu
+distributed computing
+parallel processing
+multiprocessing
+threading
+asyncio
+concurrency
+parallelism
+
+# Методы и алгоритмы
+logistic regression
+svm
+decision trees
+random forest
+gradient boosting
+neural networks
+cnn
+rnn
+lstm
+gru
+autoencoders
+vae
+gan
+diffusion models
+graph neural networks
+recommender systems
+collaborative filtering
+content-based filtering
+matrix factorization
+anomaly detection
+outlier detection
+time series
+arima
+prophet
+lstm forecasting
+seasonal decomposition
+fourier transform
+signal processing
+monte carlo
+simulation
+optimization algorithms
+genetic algorithm
+simulated annealing
+
+# DevOps / MLOps
+mlops
+ci/cd
+github actions
+gitlab ci
+jenkins
+argo
+tekton
+model versioning
+experiment tracking
+model registry
+feature store
+model monitoring
+model explainability
+shap
+lime
+alibi
+captum
+fairness
+bias detection
+reproducibility
+containerization
+orchestration
+kubeflow
+mlflow
+dagshub
+neptune
+clearml
+polyaxon

@@ -1,0 +1,32 @@
+# Поисковые фразы
+data scientist
+machine learning
+data analyst
+data engineer
+ml engineer
+ai specialist
+computer vision
+nlp engineer
+deep learning
+data science
+ml research
+big data
+mlops
+ai developer
+ml developer
+специалист по data science
+аналитик данных
+инженер данных
+специалист по машинному обучению
+инженер по ml
+инженер по ии
+инженер по компьютерному зрению
+Инженер по NLP
+Инженер по ИИ и ML
+Специалист по ИИ
+Специалист по анализу данных
+Специалист по большим данным
+Инженер MLOps
+Исследователь ИИ
+Исследователь ML
+Специалист по глубокому обучению

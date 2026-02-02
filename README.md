@@ -14,7 +14,7 @@
 1. Клонируйте репозиторий:
 
    ```bash
-   git clone https://github.com/yourusername/hh-skills-parser.git
+   git clone https://github.com/valeksan/hh-skills-parser.git
    cd hh-skills-parser
    ```
 
@@ -55,3 +55,7 @@
 График показывает самые популярные навыки, извлечённые из вакансий:
 
 ![Пример графика навыков](hh_skills_bar_chart.png)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

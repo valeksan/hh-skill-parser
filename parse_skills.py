@@ -72,7 +72,7 @@ AREA = 1
 # Полный список тут https://api.hh.ru/areas
 
 # Вывести уже обработанные данные (для отладки, не парсить так как долго)
-OPTION_SKIP_PARSING = True 
+OPTION_SKIP_PARSING = False
 
 def get_vacancies(query, area, pages=20):
     """

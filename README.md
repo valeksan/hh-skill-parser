@@ -15,7 +15,7 @@
 1. Клонируйте репозиторий:
 
    ```bash
-   git clone https://github.com/valeksan/hh-skills-parser.git
+   git clone --depth=1 https://github.com/valeksan/hh-skills-parser.git
    cd hh-skills-parser
    ```
 
@@ -32,21 +32,24 @@
     pip install -r requirements.txt
     ```
 
-## Настройка
-
-- `queries.txt` — список ключевых запросов для поиска вакансий.
-- `skills_whitelist.txt` — список навыков для анализа.
-- `progress.json` — файл прогресса (создаётся автоматически!).
-
 ## Использование
 
-Запустите скрипт:
-   ```bash
-   python parse_skills.py
-   ```
+1. **Настройка**. Измените файлы:
+- `queries.txt` — список ключевых запросов для поиска вакансий.
+- `skills_whitelist.txt` — список навыков для анализа. (не обязательно)
 
-Результат будет сохранён в файл `hh_skills_bar_chart.png`.
-Можно добавить свои навыки в `skills_whitelist.txt`.
+2. **Запуск**
+   ```bash
+   # Стандарный способ
+   python parse_skills.py
+   # На UNIX
+   ./parse_skills.py
+   
+   # Для получения справки
+   ./parse_skills.py --help
+   ```
+___
+3. **Результат** будет сохранён в файл `hh_skills_bar_chart.png`.
 
 ## Формат файлов
 
@@ -69,15 +72,6 @@ sql
 pandas
 ...
 ```
-
-## Зависимости
-
-- requests
-- beautifulsoup4
-- matplotlib
-- seaborn
-- pandas
-- numpy
 
 ## Результаты
 

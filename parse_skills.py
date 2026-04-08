@@ -10,6 +10,7 @@ import seaborn as sns
 from bs4 import BeautifulSoup
 import os
 import json
+import argparse
 
 # Сколько навыков отобразить на графике
 TOP_N_SHOW_ON_PLOT = 50
@@ -19,62 +20,11 @@ MAX_PARSE_PAGES = 20
 
 # Регион поиска
 AREA = 1
-# AREA ID регионов HH.ru (основные города России)
 # Москва = 1
-# Санкт-Петербург = 2
-# Новосибирск = 3
-# Екатеринбург = 4
-# Нижний Новгород = 5
-# Казань = 6
-# Челябинск = 7
-# Омск = 8
-# Самара = 9
-# Ростов-на-Дону = 10
-# Уфа = 11
-# Красноярск = 12
-# Воронеж = 13
-# Пермь = 14
-# Волгоград = 15
-# Краснодар = 16
-# Саратов = 17
-# Тюмень = 18
-# Тольятти = 19
-# Ижевск = 20
-# Барнаул = 21
-# Ульяновск = 22
-# Иркутск = 23
-# Хабаровск = 24
-# Махачкала = 25
-# Ярославль = 26
-# Владивосток = 27
-# Магнитогорск = 28
-# Томск = 29
-# Кемерово = 30
-# Рязань = 31
-# Астрахань = 32
-# Набережные Челны = 33
-# Пенза = 34
-# Липецк = 35
-# Киров = 36
-# Чебоксары = 37
-# Курск = 38
-# Белгород = 39
-# Калининград = 40
-# Архангельск = 41
-# Владимир = 42
-# Севастополь = 43
-# Сочи = 44
-# Ставрополь = 45
-# Симферополь = 46
-# Казань = 6
-# Оренбург = 47
-# Новокузнецк = 48
-# Йошкар-Ола = 49
-# Смоленск = 50
 # Полный список тут https://api.hh.ru/areas
 
 # Вывести уже обработанные данные (для отладки, не парсить так как долго)
-OPTION_SKIP_PARSING = False
+OPTION_SKIP_PARSING = True
 
 def get_vacancies(query, area, pages=20):
     """
@@ -114,9 +64,8 @@ def get_vacancies(query, area, pages=20):
         except requests.exceptions.RequestException as e:
             print(f"Ошибка при запросе: {e}")
             continue
-        
-    return all_vacancies
 
+    return all_vacancies
 
 def load_skills_whitelist(path="skills_whitelist.txt"):
     """
@@ -141,7 +90,7 @@ def load_skills_whitelist(path="skills_whitelist.txt"):
                 if line.strip() and not line.startswith('#')
             ]
         return set(lines)
-    
+
     except FileNotFoundError:
         # Возвращаем дефолтный список, если файла нет
         default_skills = {
@@ -208,7 +157,6 @@ def load_queries(path="queries.txt"):
         return [q for q in lines if q]
     except FileNotFoundError:
         return ["DataScience", "Machine Learning", "ML Engineer", "Data Scientist", "AI Specialist"]
-    
 
 def save_progress(progress_file, progress_data):
     """Сохраняет текущий прогресс в JSON-файл."""
@@ -221,11 +169,63 @@ def load_progress(progress_file):
         with open(progress_file, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {}
-    
+
 
 SKILL_WHITELIST = load_skills_whitelist() # считываем все искомые слова из файла
 
+def cli_parse():
+    """
+        Парсит аргументы командной строки.
+
+        Returns:
+            argparse.Namespace:
+                area (int): Зона поиска (из hh.ru)
+                output (str): Целевой файл для записи конечного результата
+                count_vacan (int): Кол-во вакансий
+                count_skill (int):
+        """
+    parser = argparse.ArgumentParser(
+        description=(
+            'Программа собирает вакансии с сайта [HH.ru](https://hh.ru) по '
+            'ключевым запросам (например, "DataScience", "ML Engineer"), извлекает '
+            'из них **технические навыки**, и строит столбчатую диаграмму самых '
+            'популярных навыков.'
+    ))
+
+    parser.add_argument('-o', '--output',
+        default='hh_skills_bar_chart.png',
+        help='Файл для вывода результата (%(default)s)')
+
+    parser.add_argument('--area',
+        type=int,
+        default=1,
+        help=(
+            'ID города/региона поиска вакансий. '
+            'Найти можно тут https://api.hh.ru/areas. (по умолчанию %(default)s)'
+    ))
+
+    parser.add_argument('--count-vacan',
+        type=int,
+        default=-1,
+        help=(
+            'Ограничение на количество вакансий для обработки. '
+            'Отключение опции -1. (%(default)s)'
+    ))
+
+    parser.add_argument('--count-skill',
+        type=int,
+        default=50,
+        help='Количество отображаемых навыков в графике (%(default)s)')
+
+    return parser.parse_args()
+
 def main():
+    settings = cli_parse();
+    #TODO: cli_parse:
+        # area=1
+        # output='hh_skills_bar_chart.png'
+        # count_vacan=50
+        # count_skill=50
     queries = load_queries()
     progress_file = 'progress.json'
 
@@ -286,7 +286,7 @@ def main():
                 except Exception as e:
                     print(f"Ошибка при извлечении навыков для вакансии {v['id']}: {e}")
                     continue
-                
+
                 # Выводим прогресс каждые 50 вакансий или в конце
                 if current_processed % 50 == 0 or current_processed == total_to_process:
                     print(f"  Обработано {current_processed}/{total_to_process} вакансий...")
@@ -341,4 +341,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

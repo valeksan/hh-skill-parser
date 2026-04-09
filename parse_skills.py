@@ -14,7 +14,7 @@ import argparse
 import math
 
 # Вывести уже обработанные данные (для отладки, не парсить так как долго)
-OPTION_SKIP_PARSING = True
+OPTION_SKIP_PARSING = False
 
 def get_vacancies(query, area, vacancies_limit=2000):
     """

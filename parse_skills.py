@@ -109,7 +109,8 @@ def load_skills_whitelist(path="skills_whitelist.txt"):
         return set(lines)
 
     except FileNotFoundError:
-        return set([])
+        logger.warning(f"Not found {path}")
+        raise Exception("Can't load skills_whitelist")
 
 
 def extract_skills(text, skill_whitelist):

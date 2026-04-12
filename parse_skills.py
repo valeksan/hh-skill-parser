@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import random
+import re
 import time
 from collections import Counter
 
@@ -37,7 +38,6 @@ def get_vacancies(query, area, vacancies_limit=2000):
         list: Список вакансий в формате JSON (каждая вакансия — словарь).
               Возвращает пустой список в случае ошибки или отсутствия вакансий.
     """
-    # FIXME: HH чхать хотел на строгое соответствие запросам. Сделать отсев
     logger.debug(f"enter get_vacancies({locals()})")
     # API: https://api.hh.ru/openapi/redoc#tag/Poisk-vakansij/operation/get-vacancies
     base_url = "https://api.hh.ru/vacancies"
@@ -68,9 +68,6 @@ def get_vacancies(query, area, vacancies_limit=2000):
         try:
             data = fetch_data(base_url, params)
             items = data.get("items", [])
-
-            for item in items:
-                logger.info(f"\tВакансия: {item.get('name')}")
 
             if not items:
                 break
@@ -162,7 +159,8 @@ def load_queries(path="queries.txt"):
             lines = [
                 line.strip() for line in f if line.strip() and not line.startswith("#")
             ]
-        return [query for query in lines if query]
+        queries = [query for query in lines if query]
+        return queries
     except FileNotFoundError:
         logger.critical(f"Not found file {path}")
         raise Exception("Can't load query")
@@ -326,7 +324,7 @@ def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
     df_all["Count"] = pandas.to_numeric(df_all["Count"])
     df_all.to_csv(file_path, index=False)
     #
-    logger.info(f"\nВесь отсортированный список сохранен в файл {file_path}")
+    logger.info(f"Весь отсортированный список сохранен в файл {file_path}")
 
 
 def save_result_chart(sorted_skills, skills_show_count, file_path):
@@ -368,9 +366,9 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
     pyplot.title("Частота упоминаний навыков в вакансиях (HH.ru)", fontsize=16, pad=20)
     pyplot.xlabel("Количество упоминаний", fontsize=14)
     pyplot.ylabel("Навыки", fontsize=14)
-    pyplot.savefig(settings.output, dpi=150, bbox_inches="tight")
+    pyplot.savefig(file_path, dpi=150, bbox_inches="tight")
 
-    logger.info(f"\nГрафик сохранён как '{file_path}'")
+    logger.info(f"График сохранён как '{file_path}'")
 
 
 def main():
@@ -414,9 +412,20 @@ def main():
             # Обработка/анализ вакансий
             for v in vacancies:
                 id = v["id"]
+                url = f"https://api.hh.ru/vacancies/{id}"
+                name = v["name"]
+
+                logger.info(f'\tОбработка вакансии "{name}"')
+
+                # Фильтр
+                split_query = re.split("\\s|-", query)
+                # Мягкий отсев - должно совпать хотя бы одно слово
+                regex_query = f"({'|'.join(split_query)})"
+                if not re.search(regex_query, name, re.I):
+                    logger.info("\tОтсев этой вакансии")
+                    continue
 
                 # Получение скилов
-                url = f"https://api.hh.ru/vacancies/{id}"
                 try:
                     data = fetch_data(url)
                     skills = None
@@ -445,7 +454,7 @@ def main():
 
                 except Exception as e:
                     logger.error(
-                        f"Неудачная попытка извлечения навыков из вакансии {v['id']}. Error: {e}"
+                        f"Неудачная попытка извлечения навыков из вакансии. Error: {e}"
                     )
                     continue
 

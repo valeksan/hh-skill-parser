@@ -51,6 +51,17 @@
 ___
 3. **Результат** будет сохранён в файл `hh_skills_bar_chart.png`.
 
+## Environment variables
+
+### LOGLEVEL
+Приниает одно из значений `warning`,`error`,`critical`,`info`,`debug`.
+По умолчинию `LOGLEVEL`=`warning`
+
+Пример использования:
+```bash
+LOGLEVEL=info ./parse_skills.py
+```
+
 ## Формат файлов
 
 ### queries.txt

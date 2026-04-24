@@ -12,6 +12,7 @@ lisp
 perl
 php
 python
+r
 ruby
 rust
 scala

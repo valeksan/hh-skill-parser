@@ -832,15 +832,17 @@ def cli_parse(argv: list[str] | None = None):
             "  queries.txt — список ключевых запросов для поиска вакансий\n"
             "  skills_whitelist.txt — список навыков для анализа [только для --mode description]"
         ),
-        epilog=(
-            "Примеры использования:\n"
-            "  python parse_skills.py -a 1 -o skills.png\n"
-            "  python parse_skills.py --mode description --skills-show-count 30\n"
-            "  python parse_skills.py --vacancies-limit 1000 --save-every 20\n"
-            "\n"
-            "Для получения справки используйте --help или -h."
-        ),
+        epilog="",
         add_help=True,
+    )
+    prog_name = parser.prog
+    parser.epilog = (
+        "Примеры использования:\n"
+        f"  {prog_name} -a 1 -o skills.png\n"
+        f"  {prog_name} --mode description --skills-show-count 30\n"
+        f"  {prog_name} --vacancies-limit 1000 --save-every 20\n"
+        "\n"
+        "Для получения справки используйте --help или -h."
     )
 
     parser.add_argument(

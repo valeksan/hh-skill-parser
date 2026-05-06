@@ -50,6 +50,10 @@
 
    # Если API HH режется, можно сразу использовать HTML-источник
    ./parse_skills.py --source html --mode description
+
+   # Если нужен key-skills, но HTML-ветка часто не отдает их, можно автоматически
+   # переключаться на description для HTML-вакансий
+   ./parse_skills.py --source auto --mode key-skills --html-description-fallback
    ```
 ___
 3. **Результат** будет сохранён в файл `hh_skills_bar_chart.png`.
@@ -176,6 +180,7 @@ pandas
    - `--source auto` сначала пытается использовать API HH
    - при блокировке `api.hh.ru` переключается на HTML-поиск `hh.ru/search/vacancy`
    - `--source html` позволяет сразу идти в HTML-режим
+   - `--html-description-fallback` автоматически меняет `key-skills` на `description` для HTML-вакансий
 
 6. **Улучшенное логирование** — при ошибке 403 логируется первые 500 символов тела ответа; если ответ пришёл через `ddos-guard`, это отмечается отдельно.
 
@@ -203,6 +208,7 @@ pandas
 7. **Ограничьте количество запросов** — уменьшите `vacancies_limit` или количество запросов в `queries.txt`.
 8. Если видите `ProxyError ... 127.0.0.1:8080 connection refused`, это значит, что локальный прокси не запущен. В таком случае уберите `HTTPS_PROXY`/`--proxy` или укажите реальный прокси.
 9. Если нужен максимально живучий режим с текущего IP, попробуйте `--source html --mode description`.
+10. Если вы хотите оставить `--mode key-skills`, но не терять HTML-результаты, добавьте `--html-description-fallback`.
 
 ### Дополнительные меры
 

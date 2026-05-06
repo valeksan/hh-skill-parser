@@ -34,6 +34,7 @@ DEFAULT_VACANCY_DELAY_MIN = 1.0
 DEFAULT_VACANCY_DELAY_MAX = 3.0
 DEFAULT_DATA_SOURCE = "auto"
 HTML_SEARCH_PAGE_SIZE = 20
+DEFAULT_HTML_DESCRIPTION_FALLBACK = False
 
 session = None
 REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
@@ -286,6 +287,7 @@ def parse_html_vacancy_page(html_text: str, vacancy: dict) -> dict:
             if title_node is not None
             else vacancy.get("name", "")
         ),
+        "_source": "html",
         "description": description_html,
         "key_skills": [{"name": skill} for skill in key_skills],
     }
@@ -602,7 +604,9 @@ def fetch_vacancy_data(vacancy: dict, source: str = DEFAULT_DATA_SOURCE) -> dict
 
     api_url = f"https://api.hh.ru/vacancies/{vacancy_id}"
     try:
-        return fetch_data(api_url)
+        data = fetch_data(api_url)
+        data["_source"] = "api"
+        return data
     except requests.exceptions.RequestException as error:
         if source != "auto":
             raise
@@ -623,6 +627,17 @@ def fetch_vacancy_data(vacancy: dict, source: str = DEFAULT_DATA_SOURCE) -> dict
                 return fetch_vacancy_data_from_html(vacancy)
 
         raise
+
+
+def resolve_processing_mode(settings, vacancy_data: dict) -> str:
+    """Выбирает фактический режим обработки для конкретной вакансии."""
+    if (
+        settings.mode == "key-skills"
+        and settings.html_description_fallback
+        and vacancy_data.get("_source") == "html"
+    ):
+        return "description"
+    return settings.mode
 
 
 def load_skills_whitelist(path: str = "skills_whitelist.txt") -> set:
@@ -930,6 +945,16 @@ def cli_parse(argv: list[str] | None = None):
     )
 
     parser.add_argument(
+        "--html-description-fallback",
+        action="store_true",
+        default=os.environ.get("HH_HTML_DESCRIPTION_FALLBACK", "").lower() in {"1", "true", "yes"},
+        help=(
+            "Если vacancy загружается через HTML и выбран режим key-skills, "
+            "автоматически переключаться на description для этой вакансии"
+        ),
+    )
+
+    parser.add_argument(
         "--env-file",
         default=os.environ.get("HH_ENV_FILE", ".env"),
         help="Путь к .env-файлу с переменными окружения (%(default)s)",
@@ -1179,7 +1204,16 @@ def main():
                 # Получение скилов
                 try:
                     data = fetch_vacancy_data(v, source=settings.source)
-                    match settings.mode:
+                    effective_mode = resolve_processing_mode(settings, data)
+                    if effective_mode != settings.mode:
+                        logger.info(
+                            '\tHTML fallback: переключаю режим с "%s" на "%s" для вакансии "%s"',
+                            settings.mode,
+                            effective_mode,
+                            name,
+                        )
+
+                    match effective_mode:
                         case "description":
                             skills = get_skills_from_description(data)
                         case "key-skills":

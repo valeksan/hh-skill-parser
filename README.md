@@ -202,7 +202,7 @@ cp .env.example .env
 
 ### LOGLEVEL
 Принимает одно из значений `warning`, `error`, `critical`, `info`, `debug`.
-По умолчанию `LOGLEVEL=warning`.
+По умолчанию `LOGLEVEL=info`, чтобы в консоли был виден прогресс парсинга.
 
 Пример использования:
 ```bash

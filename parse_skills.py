@@ -1164,7 +1164,7 @@ def main():
     AUTO_SOURCE_FORCE_HTML = False
 
     # Logging
-    log_level = os.environ.get("LOGLEVEL", "WARNING").upper()
+    log_level = os.environ.get("LOGLEVEL", "INFO").upper()
     logging.basicConfig(
         level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s"
     )

@@ -37,7 +37,6 @@ DEFAULT_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-DEFAULT_CLIENT_CONTACT = ""
 DEFAULT_REQUEST_TIMEOUT = 20.0
 DEFAULT_PAGE_DELAY_MIN = 2.0
 DEFAULT_PAGE_DELAY_MAX = 5.0
@@ -61,10 +60,6 @@ OPTION_SKIP_PARSING = False
 
 class ProxyUnavailableError(RuntimeError):
     """Прокси указан, но недоступен."""
-
-
-class BadUserAgentError(RuntimeError):
-    """HH отверг заголовок HH-User-Agent."""
 
 
 class SourceBlockedError(RuntimeError):
@@ -145,23 +140,6 @@ def is_ddos_guard_response(response: requests.Response | None) -> bool:
     return "ddos-guard" in server.lower()
 
 
-def build_hh_user_agent(contact: str) -> str:
-    """Формирует идентификатор клиента в формате, удобном для HH API."""
-    contact = contact.strip() if contact else DEFAULT_CLIENT_CONTACT
-    return f"hh-skill-parser/1.0 ({contact})"
-
-
-def is_bad_hh_user_agent_response(response: requests.Response | None) -> bool:
-    """Проверяет, что HH отклонил заголовок HH-User-Agent."""
-    if response is None:
-        return False
-    try:
-        payload = response.json()
-    except ValueError:
-        return False
-    return any(error.get("type") == "bad_user_agent" for error in payload.get("errors", []))
-
-
 def is_local_proxy(proxy_url: str | None) -> bool:
     """Определяет, что прокси указывает на localhost."""
     if not proxy_url:
@@ -175,13 +153,12 @@ def sleep_between_requests(delay_min: float, delay_max: float) -> None:
 
 
 def fetch_html(url: str, params: dict | None = None) -> str:
-    """Выполняет HTML-запрос к HH без заголовка HH-User-Agent."""
+    """Выполняет HTML-запрос к HH."""
     if params is None:
         params = {}
 
     headers = dict(session.headers)
     headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    headers.pop("HH-User-Agent", None)
 
     response = session.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
@@ -337,8 +314,6 @@ def configure_http_session(settings) -> None:
         "Referer": "https://hh.ru/search/vacancy",
         "Origin": "https://hh.ru",
     }
-    if settings.send_hh_user_agent and settings.client_contact.strip():
-        headers["HH-User-Agent"] = build_hh_user_agent(settings.client_contact)
     session.headers.update(headers)
 
     if settings.proxy:
@@ -435,11 +410,6 @@ def retry_request(max_retries=3, base_delay=1.0, max_delay=30.0):
                                 logger.error(f"Тело ответа {status}: {body}")
                             except:
                                 pass
-                            if status == 400 and is_bad_hh_user_agent_response(e.response):
-                                logger.error(
-                                    "HH отклонил заголовок HH-User-Agent как bad_user_agent. "
-                                    "Запустите без --send-hh-user-agent."
-                                )
                     else:
                         # Сетевая ошибка (таймаут, соединение и т.д.)
                         logger.warning(f"Сетевая ошибка: {type(e).__name__}. Попытка {attempt + 1}/{max_retries}. Задержка {delay:.1f}с")
@@ -525,15 +495,6 @@ def get_vacancies_from_api(query: str, area: int, vacancies_limit: int = 2000) -
                 raise ProxyUnavailableError(
                     "Не удалось подключиться к прокси. Проверьте --proxy / HTTPS_PROXY / HTTP_PROXY."
                 ) from e
-            if hasattr(e, "response") and e.response is not None:
-                if e.response.status_code == 400 and is_bad_hh_user_agent_response(e.response):
-                    logger.error(
-                        "Сбор списка вакансий остановлен: HH отверг HH-User-Agent. "
-                        "Уберите --send-hh-user-agent или переменную HH_SEND_USER_AGENT."
-                    )
-                    raise BadUserAgentError(
-                        "HH отверг заголовок HH-User-Agent. Уберите --send-hh-user-agent или HH_SEND_USER_AGENT."
-                    ) from e
             if hasattr(e, "response") and e.response is not None and e.response.status_code == 403 and is_ddos_guard_response(e.response):
                 raise SourceBlockedError(
                     "Сбор списка вакансий через API остановлен из-за внешней блокировки ddos-guard."
@@ -593,9 +554,6 @@ def get_vacancies(
     except SourceBlockedError as error:
         logger.warning("%s Переключаюсь на HTML fallback.", error)
         return get_vacancies_from_html(query, area, vacancies_limit)
-    except BadUserAgentError as error:
-        logger.warning("%s Переключаюсь на HTML fallback.", error)
-        return get_vacancies_from_html(query, area, vacancies_limit)
 
 
 def fetch_vacancy_data_from_html(vacancy: dict) -> dict:
@@ -625,12 +583,6 @@ def fetch_vacancy_data(vacancy: dict, source: str = DEFAULT_DATA_SOURCE) -> dict
 
         response = getattr(error, "response", None)
         if response is not None:
-            if response.status_code == 400 and is_bad_hh_user_agent_response(response):
-                logger.warning(
-                    "API деталей вакансии отверг HH-User-Agent. Переключаюсь на HTML для вакансии %s.",
-                    vacancy_id,
-                )
-                return fetch_vacancy_data_from_html(vacancy)
             if response.status_code == 403 and is_ddos_guard_response(response):
                 logger.warning(
                     "API деталей вакансии заблокирован ddos-guard. Переключаюсь на HTML для вакансии %s.",
@@ -878,22 +830,6 @@ def cli_parse(argv: list[str] | None = None):
         type=int,
         default=10,
         help="Сохранять прогресс каждые N обработанных вакансий (%(default)s)",
-    )
-
-    parser.add_argument(
-        "--client-contact",
-        default=os.environ.get("HH_CLIENT_CONTACT", DEFAULT_CLIENT_CONTACT),
-        help=(
-            "Контакт для HH-User-Agent: email, URL проекта или Telegram "
-            "(используется только вместе с --send-hh-user-agent)"
-        ),
-    )
-
-    parser.add_argument(
-        "--send-hh-user-agent",
-        action="store_true",
-        default=os.environ.get("HH_SEND_USER_AGENT", "").lower() in {"1", "true", "yes"},
-        help="Отправлять заголовок HH-User-Agent. По умолчанию выключено, так как API может отклонять его как bad_user_agent.",
     )
 
     parser.add_argument(
@@ -1176,12 +1112,6 @@ def main():
                 logger.critical(str(e))
                 logger.critical(
                     "Останавливаю весь сбор, потому что без рабочего прокси дальнейшие запросы бессмысленны."
-                )
-                return
-            except BadUserAgentError as e:
-                logger.critical(str(e))
-                logger.critical(
-                    "Останавливаю весь сбор, потому что HH не принимает текущий HH-User-Agent."
                 )
                 return
             except SourceBlockedError as e:

@@ -2,6 +2,7 @@
 
 import argparse
 import functools
+import html
 import json
 import logging
 import math
@@ -31,6 +32,8 @@ DEFAULT_PAGE_DELAY_MIN = 2.0
 DEFAULT_PAGE_DELAY_MAX = 5.0
 DEFAULT_VACANCY_DELAY_MIN = 1.0
 DEFAULT_VACANCY_DELAY_MAX = 3.0
+DEFAULT_DATA_SOURCE = "auto"
+HTML_SEARCH_PAGE_SIZE = 20
 
 session = None
 REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
@@ -49,6 +52,10 @@ class ProxyUnavailableError(RuntimeError):
 
 class BadUserAgentError(RuntimeError):
     """HH отверг заголовок HH-User-Agent."""
+
+
+class SourceBlockedError(RuntimeError):
+    """Основной источник данных заблокирован внешней защитой."""
 
 
 def parse_bootstrap_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
@@ -147,6 +154,141 @@ def is_local_proxy(proxy_url: str | None) -> bool:
     if not proxy_url:
         return False
     return "127.0.0.1" in proxy_url or "localhost" in proxy_url
+
+
+def sleep_between_requests(delay_min: float, delay_max: float) -> None:
+    """Спит случайное время в заданном диапазоне."""
+    time.sleep(random.uniform(delay_min, delay_max))
+
+
+def fetch_html(url: str, params: dict | None = None) -> str:
+    """Выполняет HTML-запрос к HH без заголовка HH-User-Agent."""
+    if params is None:
+        params = {}
+
+    headers = dict(session.headers)
+    headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    headers.pop("HH-User-Agent", None)
+
+    response = session.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    return response.text
+
+
+def extract_vacancy_id(value: str | None) -> str | None:
+    """Извлекает ID вакансии из URL или строки."""
+    if not value:
+        return None
+    match = re.search(r"/vacancy/(\d+)", value)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b(\d{6,})\b", value)
+    if match:
+        return match.group(1)
+    return None
+
+
+def build_html_vacancy_url(vacancy_id: str) -> str:
+    """Строит канонический URL HTML-страницы вакансии."""
+    return f"https://hh.ru/vacancy/{vacancy_id}"
+
+
+def annotate_api_vacancies(items: list[dict]) -> list[dict]:
+    """Добавляет служебные поля к вакансиям, пришедшим из API."""
+    annotated_items = []
+    for item in items:
+        vacancy = dict(item)
+        vacancy["_source"] = "api"
+        vacancy.setdefault("alternate_url", build_html_vacancy_url(str(vacancy["id"])))
+        annotated_items.append(vacancy)
+    return annotated_items
+
+
+def parse_html_search_results(html_text: str) -> list[dict]:
+    """Извлекает вакансии из HTML-страницы поиска HH."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    vacancies = []
+    seen_ids = set()
+
+    for link in soup.select('a[data-qa="serp-item__title"]'):
+        href = link.get("href")
+        vacancy_id = extract_vacancy_id(href)
+        if not vacancy_id or vacancy_id in seen_ids:
+            continue
+
+        seen_ids.add(vacancy_id)
+        vacancies.append(
+            {
+                "id": vacancy_id,
+                "name": link.get_text(" ", strip=True),
+                "alternate_url": href,
+                "_source": "html",
+            }
+        )
+
+    return vacancies
+
+
+def extract_key_skills_from_html_payload(html_text: str) -> list[str]:
+    """Пытается извлечь keySkills из встроенного JSON страницы вакансии."""
+    match = re.search(
+        r'"keySkills":(null|\[.*?\]),"driverLicenseTypes"',
+        html_text,
+        re.S,
+    )
+    if not match or match.group(1) == "null":
+        return []
+
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+
+    key_skills = []
+    for item in payload:
+        if isinstance(item, str):
+            key_skills.append(item)
+            continue
+        if isinstance(item, dict):
+            for key in ("name", "text", "value", "label"):
+                value = item.get(key)
+                if value:
+                    key_skills.append(value)
+                    break
+
+    return key_skills
+
+
+def parse_html_vacancy_page(html_text: str, vacancy: dict) -> dict:
+    """Преобразует HTML-страницу вакансии в унифицированный словарь."""
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    title_node = soup.select_one('[data-qa="vacancy-title"]') or soup.find("h1")
+    description_node = soup.select_one('[data-qa="vacancy-description"]')
+    ld_json_node = soup.select_one('script[type="application/ld+json"]')
+
+    description_html = ""
+    if description_node is not None:
+        description_html = description_node.decode_contents()
+    elif ld_json_node is not None:
+        try:
+            ld_json_payload = json.loads(ld_json_node.get_text())
+            description_html = html.unescape(ld_json_payload.get("description", ""))
+        except json.JSONDecodeError:
+            description_html = ""
+
+    key_skills = extract_key_skills_from_html_payload(html_text)
+
+    return {
+        "id": str(vacancy["id"]),
+        "name": (
+            title_node.get_text(" ", strip=True)
+            if title_node is not None
+            else vacancy.get("name", "")
+        ),
+        "description": description_html,
+        "key_skills": [{"name": skill} for skill in key_skills],
+    }
 
 
 def configure_http_session(settings) -> None:
@@ -303,8 +445,8 @@ def retry_request(max_retries=3, base_delay=1.0, max_delay=30.0):
     return decorator
 
 
-@animate(start="Поиск вакансий")
-def get_vacancies(query: str, area: int, vacancies_limit: int = 2000) -> list:
+@animate(start="Поиск вакансий API")
+def get_vacancies_from_api(query: str, area: int, vacancies_limit: int = 2000) -> list:
     """
     Собирает вакансии с HH.ru по заданному запросу.
 
@@ -353,11 +495,11 @@ def get_vacancies(query: str, area: int, vacancies_limit: int = 2000) -> list:
 
             if not items:
                 break
-            all_vacancies.extend(items)
+            all_vacancies.extend(annotate_api_vacancies(items))
 
             logger.info(f"Обработана страница {page_current + 1} по запросу '{query}'")
             # задержка чтоб не быть забанеными сервером удаленным, не наглеем :)
-            time.sleep(random.uniform(PAGE_DELAY_MIN, PAGE_DELAY_MAX))
+            sleep_between_requests(PAGE_DELAY_MIN, PAGE_DELAY_MAX)
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка при запросе. Error: {e}")
@@ -379,14 +521,108 @@ def get_vacancies(query: str, area: int, vacancies_limit: int = 2000) -> list:
                         "HH отверг заголовок HH-User-Agent. Уберите --send-hh-user-agent или HH_SEND_USER_AGENT."
                     ) from e
             if hasattr(e, "response") and e.response is not None and e.response.status_code == 403 and is_ddos_guard_response(e.response):
-                logger.error(
-                    "Сбор списка вакансий остановлен из-за внешней блокировки ddos-guard. "
-                    "Попробуйте другой IP/прокси, увеличенные паузы или повторный запуск позже."
-                )
-                break
+                raise SourceBlockedError(
+                    "Сбор списка вакансий через API остановлен из-за внешней блокировки ddos-guard."
+                ) from e
             continue
 
     return all_vacancies
+
+
+@animate(start="Поиск вакансий HTML")
+def get_vacancies_from_html(query: str, area: int, vacancies_limit: int = 2000) -> list:
+    """Собирает вакансии с HTML-страницы поиска HH."""
+    search_url = "https://hh.ru/search/vacancy"
+    if vacancies_limit <= 0:
+        logger.critical("vacancies_limit должно быть натуральным числом")
+        raise Exception("vacancies_limit должно быть натуральным числом")
+
+    pages_total = math.ceil(vacancies_limit / HTML_SEARCH_PAGE_SIZE)
+    all_vacancies = []
+
+    for page_current in range(pages_total):
+        params = {
+            "text": query,
+            "area": area,
+            "page": page_current,
+        }
+
+        html_text = fetch_html(search_url, params=params)
+        items = parse_html_search_results(html_text)
+        if not items:
+            break
+
+        all_vacancies.extend(items)
+        if len(all_vacancies) >= vacancies_limit:
+            return all_vacancies[:vacancies_limit]
+
+        logger.info(f"Обработана HTML-страница {page_current + 1} по запросу '{query}'")
+        sleep_between_requests(PAGE_DELAY_MIN, PAGE_DELAY_MAX)
+
+    return all_vacancies[:vacancies_limit]
+
+
+def get_vacancies(
+    query: str,
+    area: int,
+    vacancies_limit: int = 2000,
+    source: str = DEFAULT_DATA_SOURCE,
+) -> list:
+    """Собирает вакансии через API, HTML или автоматический fallback."""
+    if source == "api":
+        return get_vacancies_from_api(query, area, vacancies_limit)
+    if source == "html":
+        return get_vacancies_from_html(query, area, vacancies_limit)
+
+    try:
+        return get_vacancies_from_api(query, area, vacancies_limit)
+    except SourceBlockedError as error:
+        logger.warning("%s Переключаюсь на HTML fallback.", error)
+        return get_vacancies_from_html(query, area, vacancies_limit)
+    except BadUserAgentError as error:
+        logger.warning("%s Переключаюсь на HTML fallback.", error)
+        return get_vacancies_from_html(query, area, vacancies_limit)
+
+
+def fetch_vacancy_data_from_html(vacancy: dict) -> dict:
+    """Загружает HTML-страницу вакансии и нормализует её структуру."""
+    vacancy_id = str(vacancy["id"])
+    url = vacancy.get("alternate_url") or build_html_vacancy_url(vacancy_id)
+    html_text = fetch_html(url)
+    return parse_html_vacancy_page(html_text, vacancy)
+
+
+def fetch_vacancy_data(vacancy: dict, source: str = DEFAULT_DATA_SOURCE) -> dict:
+    """Загружает данные вакансии с учётом выбранного источника."""
+    vacancy_source = vacancy.get("_source", "api")
+    vacancy_id = str(vacancy["id"])
+
+    if source == "html" or vacancy_source == "html":
+        return fetch_vacancy_data_from_html(vacancy)
+
+    api_url = f"https://api.hh.ru/vacancies/{vacancy_id}"
+    try:
+        return fetch_data(api_url)
+    except requests.exceptions.RequestException as error:
+        if source != "auto":
+            raise
+
+        response = getattr(error, "response", None)
+        if response is not None:
+            if response.status_code == 400 and is_bad_hh_user_agent_response(response):
+                logger.warning(
+                    "API деталей вакансии отверг HH-User-Agent. Переключаюсь на HTML для вакансии %s.",
+                    vacancy_id,
+                )
+                return fetch_vacancy_data_from_html(vacancy)
+            if response.status_code == 403 and is_ddos_guard_response(response):
+                logger.warning(
+                    "API деталей вакансии заблокирован ddos-guard. Переключаюсь на HTML для вакансии %s.",
+                    vacancy_id,
+                )
+                return fetch_vacancy_data_from_html(vacancy)
+
+        raise
 
 
 def load_skills_whitelist(path: str = "skills_whitelist.txt") -> set:
@@ -684,6 +920,16 @@ def cli_parse(argv: list[str] | None = None):
     )
 
     parser.add_argument(
+        "--source",
+        choices=["auto", "api", "html"],
+        default=DEFAULT_DATA_SOURCE,
+        help=(
+            "Источник вакансий: auto пытается API и переключается на HTML при блокировке, "
+            "api использует только API, html использует только HTML-страницы (%(default)s)"
+        ),
+    )
+
+    parser.add_argument(
         "--env-file",
         default=os.environ.get("HH_ENV_FILE", ".env"),
         help="Путь к .env-файлу с переменными окружения (%(default)s)",
@@ -767,7 +1013,7 @@ def get_skills_from_key_skills(data: dict) -> list:
     """
     logger.debug("enter get_skills_from_key_skills(can't show to much data)")
 
-    key_skills = data.get("key_skills")
+    key_skills = data.get("key_skills") or []
     skills = [item["name"] for item in key_skills]
     return skills
 
@@ -875,7 +1121,10 @@ def main():
         for query in queries:
             try:
                 vacancies = get_vacancies(
-                    query, area=settings.area, vacancies_limit=settings.vacancies_limit
+                    query,
+                    area=settings.area,
+                    vacancies_limit=settings.vacancies_limit,
+                    source=settings.source,
                 )
             except ProxyUnavailableError as e:
                 logger.critical(str(e))
@@ -887,6 +1136,12 @@ def main():
                 logger.critical(str(e))
                 logger.critical(
                     "Останавливаю весь сбор, потому что HH не принимает текущий HH-User-Agent."
+                )
+                return
+            except SourceBlockedError as e:
+                logger.critical(str(e))
+                logger.critical(
+                    "Останавливаю весь сбор, потому что выбранный источник данных оказался заблокирован."
                 )
                 return
             query_vacancy_map[query] = vacancies
@@ -904,7 +1159,6 @@ def main():
             # Обработка/анализ вакансий
             for v in vacancies:
                 id = v["id"]
-                url = f"https://api.hh.ru/vacancies/{id}"
                 name = v["name"]
 
                 logger.info(f'\tОбработка вакансии "{name}"')
@@ -924,7 +1178,7 @@ def main():
 
                 # Получение скилов
                 try:
-                    data = fetch_data(url)
+                    data = fetch_vacancy_data(v, source=settings.source)
                     match settings.mode:
                         case "description":
                             skills = get_skills_from_description(data)

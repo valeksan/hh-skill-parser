@@ -883,12 +883,14 @@ def cli_parse(argv: list[str] | None = None):
         "-m",
         "--mode",
         default="key-skills",
-        choices=["key-skills", "description"],
+        choices=["key-skills", "description", "both"],
         help=(
             "Режим key-skills: извлекает навыки из поля key_skills вакансии, "
             "не требует skills_whitelist.txt\n"
             "Режим description: анализирует текст описания вакансий, "
-            "требует файл skills_whitelist.txt (%(default)s)"
+            "требует файл skills_whitelist.txt\n"
+            "Режим both: объединяет key_skills и description, "
+            "считает каждый навык один раз на вакансию (%(default)s)"
         ),
     )
 
@@ -1063,6 +1065,31 @@ def get_skills_from_key_skills(data: dict) -> list:
     key_skills = data.get("key_skills") or []
     skills = [item["name"] for item in key_skills]
     return skills
+
+
+def normalize_skill_name(skill: str) -> str:
+    """Приводит название навыка к единому виду для стабильного подсчёта."""
+    return re.sub(r"\s+", " ", skill.strip().lower())
+
+
+def deduplicate_skills(skills: list[str]) -> list[str]:
+    """Удаляет дубликаты навыков в рамках одной вакансии."""
+    result = []
+    seen = set()
+    for skill in skills:
+        normalized = normalize_skill_name(skill)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def get_skills_from_both_sources(data: dict) -> list[str]:
+    """Объединяет навыки из key_skills и description c дедупликацией."""
+    key_skills = get_skills_from_key_skills(data)
+    description_skills = get_skills_from_description(data)
+    return deduplicate_skills(key_skills + description_skills)
 
 
 def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
@@ -1246,10 +1273,14 @@ def main():
                             skills = get_skills_from_description(data)
                         case "key-skills":
                             skills = get_skills_from_key_skills(data)
+                        case "both":
+                            skills = get_skills_from_both_sources(data)
                         case _:
                             logger.critical("CLI --mode -> Отсутствует handler.")
                             raise Exception("CLI --mode -> Отсутствует handler.")
                             return
+
+                    skills = deduplicate_skills(skills)
 
                     # Обновляем счётчики
                     for skill in skills:

@@ -104,6 +104,30 @@ make bundle
 - `queries.txt` — список поисковых запросов, по одному на строку.
 - `skills_whitelist.txt` — список навыков для режима `--mode description`. Для `key-skills` не обязателен.
 
+### Как выбрать режим (`--mode`)
+
+- `key-skills`:
+  - берёт навыки только из структурированного поля `key_skills` вакансии;
+  - обычно даёт более "чистые" навыки;
+  - не использует `skills_whitelist.txt`.
+- `description`:
+  - ищет навыки в тексте описания вакансии;
+  - использует `skills_whitelist.txt`;
+  - обычно даёт больше находок, но возможны ложные совпадения.
+- `both`:
+  - объединяет навыки из `key_skills` и `description`;
+  - каждый навык считается один раз на одну вакансию (`id`);
+  - удобно, когда хочешь максимум сигнала без двойного подсчёта.
+
+Практическое правило:
+- если API HH доступен, можно использовать `key-skills`;
+- если API блокируется и работа идёт через HTML fallback, чаще лучше `description`.
+
+Почему так:
+- в HTML-ветке поле `key_skills` часто пустое/недоступно;
+- поэтому при `--mode key-skills` итог может быть пустым (`current_skill_counts: {}`), даже если `processed_vacancy_ids` растёт.
+- рост `processed_vacancy_ids` в этом случае нормален: вакансия считается обработанной, даже если в ней не нашлось навыков.
+
 2. **Запуск**
    ```bash
    # Стандартный запуск
@@ -125,11 +149,30 @@ make bundle
    # можно автоматически переключаться на description
    ./parse_skills.py --source auto --mode key-skills --html-description-fallback
 
+   # Комбинированный режим: key_skills + description с дедупом на вакансию
+   ./parse_skills.py --mode both
+
    # Минимальный режим без PNG-графика
    ./parse_skills.py --no-chart
    ```
+
+3. **Типовые рабочие команды**
+   ```bash
+   # Комбинированный сбор навыков без двойного учёта по одной вакансии
+   ./parse_skills.py --mode both --source auto --html-description-fallback
+
+   # Самый живучий режим при блокировке API
+   ./parse_skills.py --source html --mode description --no-chart
+
+   # Если хочется оставить key-skills, но не терять HTML-результаты
+   ./parse_skills.py --source auto --mode key-skills --html-description-fallback
+
+   # Если ранее был пустой прогресс и много processed_vacancy_ids
+   rm -f progress.json
+   ./parse_skills.py --source html --mode description
+   ```
 ___
-3. **Результаты**
+4. **Результаты**
 - CSV со всеми навыками: `top_skills_all_data.csv`
 - PNG-график: `hh_skills_bar_chart.png` (если график не отключён)
 - Прогресс обработки: `progress.json`
@@ -238,7 +281,7 @@ pandas
 
 При `--mode key-skills` используются навыки из поля `key_skills` вакансии HH.ru. Это ближе всего к тем навыкам, которые можно подтвердить в резюме.
 
-При `--mode description` поиск будет выполнен в описании вакансии. Возможны ложные срабатывания,
+При `--mode description` поиск выполняется по тексту описания вакансии и проверяется через `skills_whitelist.txt`. Возможны ложные срабатывания,
 так как анализируется обычный текст без семантической нормализации. Например, `c` как язык программирования теоретически можно спутать с кириллической `с`.
 
 ## Устранение ошибок HTTP 403

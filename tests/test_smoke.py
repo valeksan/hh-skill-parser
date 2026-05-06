@@ -130,6 +130,17 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(api_mock.call_count, 1)
             self.assertEqual(html_mock.call_count, 2)
 
+    def test_both_mode_merges_and_deduplicates_skills_per_vacancy(self):
+        data = {
+            "key_skills": [{"name": "Python"}, {"name": "SQL"}],
+            "description": "<p>python and sql and airflow</p>",
+        }
+
+        with mock.patch.object(parse_skills, "load_skills_whitelist", return_value={"python", "sql", "airflow"}):
+            skills = parse_skills.get_skills_from_both_sources(data)
+
+        self.assertEqual(skills, ["python", "sql", "airflow"])
+
 
 if __name__ == "__main__":
     unittest.main()

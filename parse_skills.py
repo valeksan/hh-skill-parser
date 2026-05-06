@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from collections import Counter
 
@@ -48,6 +49,72 @@ class ProxyUnavailableError(RuntimeError):
 
 class BadUserAgentError(RuntimeError):
     """HH отверг заголовок HH-User-Agent."""
+
+
+def parse_bootstrap_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
+    """Считывает аргументы, нужные до основного разбора CLI."""
+    if argv is None:
+        argv = sys.argv[1:]
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--env-file",
+        default=os.environ.get("HH_ENV_FILE", ".env"),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-dotenv",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    return parser.parse_known_args(argv)
+
+
+def strip_wrapping_quotes(value: str) -> str:
+    """Удаляет внешние кавычки из значения .env."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def load_dotenv_file(path: str, override: bool = False) -> bool:
+    """Загружает переменные окружения из .env-подобного файла."""
+    if not path or not os.path.exists(path):
+        return False
+
+    loaded = 0
+    with open(path, encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if "=" not in line:
+                logger.warning(
+                    "Пропускаю строку %s в %s: ожидался формат KEY=VALUE",
+                    line_number,
+                    path,
+                )
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = strip_wrapping_quotes(value.strip())
+
+            if not key:
+                logger.warning(
+                    "Пропускаю строку %s в %s: пустое имя переменной",
+                    line_number,
+                    path,
+                )
+                continue
+
+            if override or key not in os.environ:
+                os.environ[key] = value
+                loaded += 1
+
+    logger.info("Загружен .env-файл %s (%s переменных)", path, loaded)
+    return True
 
 
 def is_ddos_guard_response(response: requests.Response | None) -> bool:
@@ -458,7 +525,7 @@ def load_progress(path: str = "progress.json") -> dict:
     return {}
 
 
-def cli_parse():
+def cli_parse(argv: list[str] | None = None):
     """
     Парсит аргументы командной строки.
 
@@ -616,7 +683,19 @@ def cli_parse():
         help="Максимальная пауза между запросами деталей вакансии в секундах (%(default)s)",
     )
 
-    settings = parser.parse_args()
+    parser.add_argument(
+        "--env-file",
+        default=os.environ.get("HH_ENV_FILE", ".env"),
+        help="Путь к .env-файлу с переменными окружения (%(default)s)",
+    )
+
+    parser.add_argument(
+        "--no-dotenv",
+        action="store_true",
+        help="Не загружать .env-файл перед разбором остальных параметров",
+    )
+
+    settings = parser.parse_args(argv)
 
     logger.debug(f"CLI args: {settings}")
     return settings
@@ -767,7 +846,11 @@ def main():
     logger.setLevel(log_level)
 
     # Настройка параметров (конфигурация)
-    settings = cli_parse()
+    bootstrap_settings, remaining_argv = parse_bootstrap_args()
+    if not bootstrap_settings.no_dotenv:
+        load_dotenv_file(bootstrap_settings.env_file)
+
+    settings = cli_parse(remaining_argv)
     configure_http_session(settings)
     queries = load_queries()
 

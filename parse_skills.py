@@ -16,8 +16,16 @@ from collections import Counter
 
 import requests
 from bs4 import BeautifulSoup
-from console_animation import animate
 from matplotlib import pyplot
+
+try:
+    from console_animation import animate
+except ImportError:
+    def animate(*_args, **_kwargs):
+        """Fallback no-op decorator when console-animation is unavailable."""
+        def decorator(func):
+            return func
+        return decorator
 
 logger = logging.getLogger(__name__)
 

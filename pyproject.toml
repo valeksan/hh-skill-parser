@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hh-skill-parser"
-version = "0.1.0"
+version = "1.0.0"
 description = "Collect vacancies from HH.ru and extract technical skills into CSV and optional charts."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-  { name = "Vitaliy" }
+  { name = "Vitaliy" },
+  { name = "Mark" }
 ]
 dependencies = [
   "requests>=2.25.1",

@@ -229,7 +229,7 @@ HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py
 
 ## Зависимости и extras
 
-Проект теперь описан через `pyproject.toml`.
+Проект описан через `pyproject.toml`.
 
 - Базовые зависимости:
   - `requests`
@@ -239,8 +239,6 @@ HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py
   - `cli` — добавляет `console-animation`
   - `bundle` — добавляет `pyinstaller`
   - `full` — устанавливает всё сразу
-
-`requirements.txt` больше не нужен: установка и extras описаны в одном месте через `pyproject.toml`.
 
 ## Формат файлов
 

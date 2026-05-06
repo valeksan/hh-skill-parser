@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import functools
 import html
 import json
@@ -13,9 +14,7 @@ import sys
 import time
 from collections import Counter
 
-import pandas
 import requests
-import seaborn
 from bs4 import BeautifulSoup
 from console_animation import animate
 from matplotlib import pyplot
@@ -1044,18 +1043,16 @@ def get_skills_from_key_skills(data: dict) -> list:
 
 
 def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
+    with open(file_path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Count", "Skill"])
+        for skill, count in sorted_skills.items():
+            writer.writerow([int(count), skill])
+
     if not sorted_skills:
-        pandas.DataFrame(columns=["Count", "Skill"]).to_csv(file_path, index=False)
         logger.warning(f"Нет данных для CSV. Создан пустой файл {file_path}")
         return
 
-    # Сохраним весь список в файл на диск
-    top_all = dict(list(sorted_skills.items()))
-    df_all = pandas.DataFrame(list(top_all.items()), columns=["Skill", "Count"])
-    df_all = df_all[["Count", "Skill"]]  # Поменять местами
-    df_all["Count"] = pandas.to_numeric(df_all["Count"])
-    df_all.to_csv(file_path, index=False)
-    #
     logger.info(f"Весь отсортированный список сохранен в файл {file_path}")
 
 
@@ -1067,43 +1064,40 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
 
     # Ограничим до топ-N для графика
     n = skills_show_count
-    top_n = dict(list(sorted_skills.items())[:n])
+    top_n = list(sorted_skills.items())[:n]
+    counts = [int(count) for _, count in top_n]
+    skills = [skill for skill, _ in top_n]
 
-    # Результаты для консоли
-    # print(f"\nТоп-{settings.skills_show_count} навыков:")
-    # for skill, count in top_n.items():
-    #    print(f"{skill}: {count}")
-
-    # Построение графика
-    df = pandas.DataFrame(list(top_n.items()), columns=["Skill", "Count"])
-    df = df[["Count", "Skill"]]  # Поменять местами
-    df["Count"] = pandas.to_numeric(df["Count"])  # Преобразовать в числа
-    df = df.sort_values("Count", ascending=False)
-    #
     height_per_skill = 0.45
-    fig_height = max(10, len(df) * height_per_skill)
-    pyplot.figure(figsize=(12, fig_height))
-    #
-    ax = seaborn.barplot(
-        data=df, y="Skill", x="Count", hue="Skill", legend=False, palette="viridis"
+    fig_height = max(10, len(skills) * height_per_skill)
+    fig, ax = pyplot.subplots(figsize=(12, fig_height))
+
+    colors = pyplot.cm.viridis(
+        [index / max(len(skills) - 1, 1) for index in range(len(skills))]
     )
-    #
+    bars = ax.barh(skills, counts, color=colors)
+
     pyplot.subplots_adjust(left=0.3, right=0.95, top=0.95, bottom=0.05)
     ax.tick_params(axis="y", labelsize=11)
     ax.tick_params(axis="x", labelsize=10)
-    #
-    # Добавляем значения на бары
-    for i, (count, skill) in enumerate(zip(df["Count"], df["Skill"])):
-        count_int = int(count)
+
+    ax.invert_yaxis()
+
+    for bar, count in zip(bars, counts):
         ax.text(
-            count_int + 10, i, str(count_int), va="center", fontsize=9, color="gray"
+            bar.get_width() + max(counts) * 0.01,
+            bar.get_y() + bar.get_height() / 2,
+            str(count),
+            va="center",
+            fontsize=9,
+            color="gray",
         )
-    #
-    #
+
     pyplot.title("Частота упоминаний навыков в вакансиях (HH.ru)", fontsize=16, pad=20)
     pyplot.xlabel("Количество упоминаний", fontsize=14)
     pyplot.ylabel("Навыки", fontsize=14)
-    pyplot.savefig(file_path, dpi=150, bbox_inches="tight")
+    fig.savefig(file_path, dpi=150, bbox_inches="tight")
+    pyplot.close(fig)
 
     logger.info(f"График сохранён как '{file_path}'")
 

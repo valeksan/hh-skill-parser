@@ -115,6 +115,21 @@ class SmokeTests(unittest.TestCase):
             self.assertIn("python", skills)
             self.assertIn("терпение к легаси", skills)
 
+    def test_auto_source_switches_to_html_after_first_ddos_block(self):
+        with mock.patch.object(parse_skills, "get_vacancies_from_api") as api_mock, mock.patch.object(
+            parse_skills, "get_vacancies_from_html", return_value=[{"id": "1", "name": "x"}]
+        ) as html_mock:
+            parse_skills.AUTO_SOURCE_FORCE_HTML = False
+            api_mock.side_effect = parse_skills.SourceBlockedError("blocked")
+
+            first = parse_skills.get_vacancies("data scientist", area=1, source="auto")
+            second = parse_skills.get_vacancies("ml engineer", area=1, source="auto")
+
+            self.assertEqual(first, [{"id": "1", "name": "x"}])
+            self.assertEqual(second, [{"id": "1", "name": "x"}])
+            self.assertEqual(api_mock.call_count, 1)
+            self.assertEqual(html_mock.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

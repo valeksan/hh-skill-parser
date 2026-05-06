@@ -56,6 +56,7 @@ VACANCY_DELAY_MAX = DEFAULT_VACANCY_DELAY_MAX
 
 # Вывести уже обработанные данные (для отладки, не парсить так как долго)
 OPTION_SKIP_PARSING = False
+AUTO_SOURCE_FORCE_HTML = False
 
 DEFAULT_QUERIES_TEMPLATE = """# Автосгенерированный файл запросов
 # Скрипт создал его, потому что queries.txt не был найден.
@@ -579,14 +580,24 @@ def get_vacancies(
     source: str = DEFAULT_DATA_SOURCE,
 ) -> list:
     """Собирает вакансии через API, HTML или автоматический fallback."""
+    global AUTO_SOURCE_FORCE_HTML
+
     if source == "api":
         return get_vacancies_from_api(query, area, vacancies_limit)
     if source == "html":
+        return get_vacancies_from_html(query, area, vacancies_limit)
+    if AUTO_SOURCE_FORCE_HTML:
+        logger.info(
+            "API уже был заблокирован ddos-guard в этом запуске. "
+            "Сразу использую HTML-источник для запроса '%s'.",
+            query,
+        )
         return get_vacancies_from_html(query, area, vacancies_limit)
 
     try:
         return get_vacancies_from_api(query, area, vacancies_limit)
     except SourceBlockedError as error:
+        AUTO_SOURCE_FORCE_HTML = True
         logger.warning("%s Переключаюсь на HTML fallback.", error)
         return get_vacancies_from_html(query, area, vacancies_limit)
 
@@ -1120,6 +1131,9 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
 
 
 def main():
+    global AUTO_SOURCE_FORCE_HTML
+    AUTO_SOURCE_FORCE_HTML = False
+
     # Logging
     log_level = os.environ.get("LOGLEVEL", "WARNING").upper()
     logging.basicConfig(
@@ -1135,6 +1149,13 @@ def main():
     settings = cli_parse(remaining_argv)
     configure_http_session(settings)
     queries = load_queries()
+
+    if settings.mode == "key-skills" and not settings.html_description_fallback:
+        logger.info(
+            'Режим "key-skills" включен без "--html-description-fallback". '
+            "Если вакансии придут из HTML, навыки могут быть пустыми, "
+            "но ID всё равно попадут в progress как обработанные."
+        )
 
     # Загружаем прогресс
     progress = load_progress()

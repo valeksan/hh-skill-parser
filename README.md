@@ -39,6 +39,9 @@
    # Только консольная анимация
    pip install -e ".[cli]"
 
+   # Только сборка бинарника
+   pip install -e ".[bundle]"
+
    # Полная установка: график + консольная анимация
    pip install -e ".[full]"
    ```
@@ -48,6 +51,7 @@
    make install
    make install-chart
    make install-cli
+   make install-bundle
    make install-full
    ```
 
@@ -60,13 +64,38 @@ make help
 make install
 make install-chart
 make install-cli
+make install-bundle
 make install-full
 make run
 make run-html
 make run-key-skills
 make run-lite
+make bundle
 make clean
 ```
+
+## Сборка бинарника
+
+Можно собрать один исполняемый файл со всеми Python-зависимостями внутри через `PyInstaller`.
+
+```bash
+make install-bundle
+make bundle
+```
+
+Результат появится в `dist/hh-skill-parser`.
+
+Если `pyinstaller` не установлен, `make bundle` не упадёт молча, а подскажет, как поставить нужный пакет.
+
+Если в бинарнике нужна поддержка графика и консольной анимации, сначала установите соответствующие extras, например:
+
+```bash
+make install-full
+make install-bundle
+make bundle
+```
+
+Важно: `queries.txt`, `skills_whitelist.txt`, `.env` и выходные файлы остаются внешними файлами рядом с запуском. Бинарник упаковывает код и Python-зависимости, но не заменяет ваши входные данные.
 
 ## Использование
 
@@ -154,6 +183,7 @@ HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py
 - Опциональные extras:
   - `chart` — добавляет `matplotlib`
   - `cli` — добавляет `console-animation`
+  - `bundle` — добавляет `pyinstaller`
   - `full` — устанавливает всё сразу
 
 `requirements.txt` больше не нужен: установка и extras описаны в одном месте через `pyproject.toml`.

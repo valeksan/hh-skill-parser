@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-  { name = "Vitaliy", email = "noreply@example.com" }
+  { name = "Vitaliy" }
 ]
 dependencies = [
   "requests>=2.25.1",
@@ -23,6 +23,9 @@ chart = [
 ]
 cli = [
   "console-animation>=0.2.7",
+]
+bundle = [
+  "pyinstaller>=6.0.0",
 ]
 full = [
   "matplotlib>=3.5.0",

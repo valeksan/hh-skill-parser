@@ -16,7 +16,6 @@ from collections import Counter
 
 import requests
 from bs4 import BeautifulSoup
-from matplotlib import pyplot
 
 try:
     from console_animation import animate
@@ -26,6 +25,11 @@ except ImportError:
         def decorator(func):
             return func
         return decorator
+
+try:
+    from matplotlib import pyplot
+except ImportError:
+    pyplot = None
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ DEFAULT_VACANCY_DELAY_MAX = 3.0
 DEFAULT_DATA_SOURCE = "auto"
 HTML_SEARCH_PAGE_SIZE = 20
 DEFAULT_HTML_DESCRIPTION_FALLBACK = False
+DEFAULT_NO_CHART = False
 
 session = None
 REQUEST_TIMEOUT = DEFAULT_REQUEST_TIMEOUT
@@ -962,6 +967,13 @@ def cli_parse(argv: list[str] | None = None):
     )
 
     parser.add_argument(
+        "--no-chart",
+        action="store_true",
+        default=os.environ.get("HH_NO_CHART", "").lower() in {"1", "true", "yes"},
+        help="Не строить PNG-график, только сохранить CSV-результат",
+    )
+
+    parser.add_argument(
         "--env-file",
         default=os.environ.get("HH_ENV_FILE", ".env"),
         help="Путь к .env-файлу с переменными окружения (%(default)s)",
@@ -1066,6 +1078,13 @@ def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
 
 @animate(start="Построение графика")
 def save_result_chart(sorted_skills, skills_show_count, file_path):
+    if pyplot is None:
+        logger.warning(
+            "matplotlib не установлен. Пропускаю построение графика. "
+            "Для полного отключения графика используйте --no-chart."
+        )
+        return
+
     if not sorted_skills:
         logger.warning("Нет данных для построения графика. Пропускаю сохранение изображения.")
         return
@@ -1317,6 +1336,10 @@ def main():
     )
 
     save_result_csv(sorted_skills)
+    if settings.no_chart:
+        logger.info("Построение графика отключено флагом --no-chart")
+        return
+
     save_result_chart(
         sorted_skills,
         skills_show_count=settings.skills_show_count,

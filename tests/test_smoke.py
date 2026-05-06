@@ -95,6 +95,26 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(rows[1], ["3", "python"])
         self.assertEqual(rows[2], ["2", "sql"])
 
+    def test_load_queries_creates_default_file_when_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queries_path = Path(temp_dir) / "queries.txt"
+
+            queries = parse_skills.load_queries(str(queries_path))
+
+            self.assertTrue(queries_path.exists())
+            self.assertGreater(len(queries), 0)
+            self.assertIn("ai wizard intern", queries)
+
+    def test_load_skills_whitelist_creates_default_file_when_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            whitelist_path = Path(temp_dir) / "skills_whitelist.txt"
+
+            skills = parse_skills.load_skills_whitelist(str(whitelist_path))
+
+            self.assertTrue(whitelist_path.exists())
+            self.assertIn("python", skills)
+            self.assertIn("терпение к легаси", skills)
+
 
 if __name__ == "__main__":
     unittest.main()

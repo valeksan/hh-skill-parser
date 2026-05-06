@@ -57,6 +57,27 @@ VACANCY_DELAY_MAX = DEFAULT_VACANCY_DELAY_MAX
 # Вывести уже обработанные данные (для отладки, не парсить так как долго)
 OPTION_SKIP_PARSING = False
 
+DEFAULT_QUERIES_TEMPLATE = """# Автосгенерированный файл запросов
+# Скрипт создал его, потому что queries.txt не был найден.
+# Здесь можно (и нужно) заменить примеры на ваши реальные запросы.
+
+data scientist
+ml engineer
+ai wizard intern
+укротитель нейросетей
+"""
+
+DEFAULT_SKILLS_WHITELIST_TEMPLATE = """# Автосгенерированный whitelist навыков
+# Скрипт создал его, потому что skills_whitelist.txt не был найден.
+# Редактируйте список под ваши задачи.
+
+python
+sql
+machine learning
+docker
+терпение к легаси
+"""
+
 
 class ProxyUnavailableError(RuntimeError):
     """Прокси указан, но недоступен."""
@@ -64,6 +85,20 @@ class ProxyUnavailableError(RuntimeError):
 
 class SourceBlockedError(RuntimeError):
     """Основной источник данных заблокирован внешней защитой."""
+
+
+def ensure_default_file(path: str, content: str, description: str) -> None:
+    """Создает файл-шаблон, если файл отсутствует."""
+    if os.path.exists(path):
+        return
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    logger.warning(
+        "Файл %s не найден. Создан шаблон по умолчанию (%s).",
+        path,
+        description,
+    )
 
 
 def parse_bootstrap_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
@@ -632,8 +667,18 @@ def load_skills_whitelist(path: str = "skills_whitelist.txt") -> set:
         return set(lines)
 
     except FileNotFoundError:
-        logger.warning(f"Not found {path}")
-        raise Exception("Can't load skills_whitelist")
+        ensure_default_file(
+            path,
+            DEFAULT_SKILLS_WHITELIST_TEMPLATE,
+            "примерный whitelist навыков",
+        )
+        with open(path, encoding="utf-8") as f:
+            lines = [
+                line.strip().lower()
+                for line in f
+                if line.strip() and not line.startswith("#")
+            ]
+        return set(lines)
 
 
 def extract_skills(text: str, skill_whitelist: set | list) -> list:
@@ -706,8 +751,17 @@ def load_queries(path: str = "queries.txt") -> list:
         queries = [query for query in lines if query]
         return queries
     except FileNotFoundError:
-        logger.critical(f"Not found file {path}")
-        raise Exception("Can't load query")
+        ensure_default_file(
+            path,
+            DEFAULT_QUERIES_TEMPLATE,
+            "примерные поисковые запросы",
+        )
+        with open(path, encoding="utf-8") as f:
+            lines = [
+                line.strip() for line in f if line.strip() and not line.startswith("#")
+            ]
+        queries = [query for query in lines if query]
+        return queries
 
 
 def save_progress(data: dict, file_path: str = "progress.json") -> None:

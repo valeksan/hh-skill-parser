@@ -28,10 +28,45 @@
    .venv\Scripts\activate     # Windows
    ```
 
-3. Установите зависимости:
-    ```bash
-    pip install -r requirements.txt
-    ```
+3. Установите проект через `pyproject.toml`:
+   ```bash
+   # Базовая установка
+   pip install -e .
+
+   # Только поддержка графиков
+   pip install -e ".[chart]"
+
+   # Только консольная анимация
+   pip install -e ".[cli]"
+
+   # Полная установка: график + консольная анимация
+   pip install -e ".[full]"
+   ```
+
+4. Или используйте `make`:
+   ```bash
+   make install
+   make install-chart
+   make install-cli
+   make install-full
+   ```
+
+## Makefile
+
+Проект содержит готовые команды для установки и запуска:
+
+```bash
+make help
+make install
+make install-chart
+make install-cli
+make install-full
+make run
+make run-html
+make run-key-skills
+make run-lite
+make clean
+```
 
 ## Использование
 
@@ -43,6 +78,9 @@
    ```bash
    # Стандартный запуск
    python parse_skills.py
+
+   # Если проект установлен как пакет, доступен entry point
+   hh-skill-parser
 
    # На UNIX
    ./parse_skills.py
@@ -105,6 +143,20 @@ HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py
 ```
 
 Важно: `127.0.0.1:8080` здесь только пример. Такой адрес сработает лишь если у вас уже запущен локальный proxy-сервер на этом порту.
+
+## Зависимости и extras
+
+Проект теперь описан через `pyproject.toml`.
+
+- Базовые зависимости:
+  - `requests`
+  - `beautifulsoup4`
+- Опциональные extras:
+  - `chart` — добавляет `matplotlib`
+  - `cli` — добавляет `console-animation`
+  - `full` — устанавливает всё сразу
+
+`requirements.txt` больше не нужен: установка и extras описаны в одном месте через `pyproject.toml`.
 
 ## Формат файлов
 

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hh-skill-parser"
+version = "0.1.0"
+description = "Collect vacancies from HH.ru and extract technical skills into CSV and optional charts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Vitaliy", email = "noreply@example.com" }
+]
+dependencies = [
+  "requests>=2.25.1",
+  "beautifulsoup4>=4.10.0",
+]
+
+[project.optional-dependencies]
+chart = [
+  "matplotlib>=3.5.0",
+]
+cli = [
+  "console-animation>=0.2.7",
+]
+full = [
+  "matplotlib>=3.5.0",
+  "console-animation>=0.2.7",
+]
+
+[project.scripts]
+hh-skill-parser = "parse_skills:main"
+
+[tool.setuptools]
+py-modules = ["parse_skills"]

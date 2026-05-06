@@ -7,6 +7,7 @@ BINARY_NAME ?= hh-skill-parser
 .PHONY: help \
 	install install-full install-chart install-cli install-bundle \
 	run run-html run-lite run-key-skills \
+	smoke \
 	bundle \
 	clean
 
@@ -15,6 +16,8 @@ help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  install/p;/^  help/p'
 	@printf "\nRun\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  run/p'
+	@printf "\nTest\n"
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  smoke/p'
 	@printf "\nBuild\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  bundle/p'
 	@printf "\nMaintenance\n"
@@ -46,6 +49,9 @@ run-lite: ## Run parser without chart rendering
 
 run-key-skills: ## Run parser with auto HTML description fallback for key-skills
 	$(RUN) --source auto --mode key-skills --html-description-fallback
+
+smoke: ## Run local smoke tests
+	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v
 
 bundle: ## Build a one-file binary into dist/
 	@if ! command -v $(PYINSTALLER) >/dev/null 2>&1; then \

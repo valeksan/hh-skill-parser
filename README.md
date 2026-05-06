@@ -70,6 +70,7 @@ make run
 make run-html
 make run-key-skills
 make run-lite
+make smoke
 make bundle
 make clean
 ```
@@ -132,6 +133,16 @@ ___
 - CSV со всеми навыками: `top_skills_all_data.csv`
 - PNG-график: `hh_skills_bar_chart.png` (если график не отключён)
 - Прогресс обработки: `progress.json`
+
+## Smoke-тесты
+
+Для быстрой локальной проверки CLI и базовой обработки данных:
+
+```bash
+make smoke
+```
+
+Тесты не ходят в сеть и проверяют только локально воспроизводимые сценарии.
 
 ## Environment variables
 

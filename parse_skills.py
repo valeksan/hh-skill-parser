@@ -354,9 +354,10 @@ def load_skills_whitelist(path: str = "skills_whitelist.txt") -> set:
         raise Exception("Can't load skills_whitelist")
 
 
-def extract_skills(text, skill_whitelist):
+def extract_skills(text: str, skill_whitelist: set | list) -> list:
     """
-    Извлекает навыки из текста (прим. описание вакансии).
+    Извлекает навыки из текста (например, описание вакансии) с использованием
+    регулярных выражений с границами слов.
 
     Производит поиск по переданному списку навыков (skill_whitelist),
     регистронезависимо. Поддерживает многословные навыки (например, 'computer vision'),
@@ -364,7 +365,7 @@ def extract_skills(text, skill_whitelist):
     (например, 'vision' внутри 'computer vision').
 
     Args:
-        text (str): Текст (прим. описание вакансии).
+        text (str): Текст (например, описание вакансии).
         skill_whitelist (set or list): Множество или список допустимых навыков.
 
     Returns:
@@ -373,15 +374,31 @@ def extract_skills(text, skill_whitelist):
     logger.debug("enter extract_skills(can't show to much data)")
     text_lower = text.lower()
     found_skills = []
-
-    for skill in sorted(skill_whitelist, key=len, reverse=True):
-        if skill in text_lower:
+    
+    # Нормализация навыков: удаление лишних пробелов, экранирование для regex
+    normalized_skills = []
+    for skill in skill_whitelist:
+        # Удаляем лишние пробелы по краям и внутри (заменяем множественные пробелы на один)
+        norm = re.sub(r'\s+', ' ', skill.strip())
+        normalized_skills.append(norm)
+    
+    # Сортируем по длине в обратном порядке, чтобы более длинные навыки обрабатывались первыми
+    for skill in sorted(normalized_skills, key=len, reverse=True):
+        # Экранируем специальные символы для regex
+        pattern = re.escape(skill)
+        # Используем гибкие границы слов: перед навыком не должно быть буквенно-цифрового символа,
+        # после навыка тоже не должно быть буквенно-цифрового символа.
+        # Это позволяет корректно обрабатывать навыки с дефисами, точками, плюсами и т.д.
+        if re.search(r'(?<!\w)' + pattern + r'(?!\w)', text_lower):
             found_skills.append(skill)
-            text_lower = text_lower.replace(skill, " ")
+            # Удаляем найденный навык из текста, чтобы избежать повторного обнаружения
+            # (заменяем на пробел, но сохраняем границы)
+            text_lower = re.sub(r'(?<!\w)' + pattern + r'(?!\w)', ' ', text_lower)
+    
     return found_skills
 
 
-def load_queries(path="queries.txt"):
+def load_queries(path: str = "queries.txt") -> list:
     """
     Загружает список поисковых запросов (названий вакансий) из файла.
 
@@ -389,11 +406,14 @@ def load_queries(path="queries.txt"):
     Пустые строки также пропускаются.
 
     Args:
-        path (str, optional): Путь к файлу со списком запросов. Defaults to "queries.txt".
+        path: Путь к файлу со списком запросов. По умолчанию "queries.txt".
 
     Returns:
-        list: Список строк — запросов для поиска вакансий.
-              Если файл не найден, возвращается стандартный набор запросов.
+        Список строк — запросов для поиска вакансий.
+
+    Raises:
+        FileNotFoundError: Если файл не найден.
+        Exception: Если файл не может быть загружен.
     """
     logger.debug(f"enter load_queries({locals()})")
     try:
@@ -408,15 +428,29 @@ def load_queries(path="queries.txt"):
         raise Exception("Can't load query")
 
 
-def save_progress(data, file_path="progress.json"):
-    """Сохраняет текущий прогресс в JSON-файл."""
+def save_progress(data: dict, file_path: str = "progress.json") -> None:
+    """
+    Сохраняет текущий прогресс в JSON-файл.
+
+    Args:
+        data: Словарь с данными прогресса.
+        file_path: Путь к файлу для сохранения. По умолчанию "progress.json".
+    """
     logger.debug(f"enter save_progress({locals()})")
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def load_progress(path="progress.json"):
-    """Загружает прогресс из JSON-файла, если существует."""
+def load_progress(path: str = "progress.json") -> dict:
+    """
+    Загружает прогресс из JSON-файла, если существует.
+
+    Args:
+        path: Путь к файлу прогресса. По умолчанию "progress.json".
+
+    Returns:
+        Словарь с данными прогресса или пустой словарь, если файл не существует.
+    """
     logger.debug(f"enter load_progress({locals()})")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -642,12 +676,15 @@ def get_skills_from_description(data: dict) -> list:
     return skills
 
 
-def get_skills_from_key_skills(data):
+def get_skills_from_key_skills(data: dict) -> list:
     """
-    Извлекает данные из поля key_skills (API HH)
+    Извлекает навыки из поля key_skills вакансии.
+
+    Args:
+        data: Словарь с данными вакансии от API HH.
 
     Returns:
-        list (str): Список навыков
+        Список названий навыков (строки).
     """
     logger.debug("enter get_skills_from_key_skills(can't show to much data)")
 
@@ -657,6 +694,11 @@ def get_skills_from_key_skills(data):
 
 
 def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
+    if not sorted_skills:
+        pandas.DataFrame(columns=["Count", "Skill"]).to_csv(file_path, index=False)
+        logger.warning(f"Нет данных для CSV. Создан пустой файл {file_path}")
+        return
+
     # Сохраним весь список в файл на диск
     top_all = dict(list(sorted_skills.items()))
     df_all = pandas.DataFrame(list(top_all.items()), columns=["Skill", "Count"])
@@ -669,6 +711,10 @@ def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
 
 @animate(start="Построение графика")
 def save_result_chart(sorted_skills, skills_show_count, file_path):
+    if not sorted_skills:
+        logger.warning("Нет данных для построения графика. Пропускаю сохранение изображения.")
+        return
+
     # Ограничим до топ-N для графика
     n = skills_show_count
     top_n = dict(list(sorted_skills.items())[:n])
@@ -744,9 +790,22 @@ def main():
         logger.info("Начинаю сбор вакансий...")
         # Загрузка ваканский
         for query in queries:
-            vacancies = get_vacancies(
-                query, area=settings.area, vacancies_limit=settings.vacancies_limit
-            )
+            try:
+                vacancies = get_vacancies(
+                    query, area=settings.area, vacancies_limit=settings.vacancies_limit
+                )
+            except ProxyUnavailableError as e:
+                logger.critical(str(e))
+                logger.critical(
+                    "Останавливаю весь сбор, потому что без рабочего прокси дальнейшие запросы бессмысленны."
+                )
+                return
+            except BadUserAgentError as e:
+                logger.critical(str(e))
+                logger.critical(
+                    "Останавливаю весь сбор, потому что HH не принимает текущий HH-User-Agent."
+                )
+                return
             query_vacancy_map[query] = vacancies
             total_to_process += len(vacancies)
             logger.info(f"Загружено вакансий по запросу '{query}': {len(vacancies)}")
@@ -754,6 +813,9 @@ def main():
         logger.info(f"Всего вакансий для обработки: {total_to_process}")
         logger.info("Начало обработки вакансий")
 
+        # Счётчик для буферизации записи прогресса
+        processed_since_last_save = 0
+        
         for query, vacancies in query_vacancy_map.items():
             logger.info(f"Обработка по запросу '{query}'...")
             # Обработка/анализ вакансий
@@ -795,28 +857,86 @@ def main():
                         skill_counter[skill] += 1
 
                     processed_ids.add(id)
-                    # FIXME: НАСИЛУЮТ ДИСК!!!
-                    save_progress(
-                        {
-                            "queries": queries,
-                            "mode": settings.mode,
-                            "processed_vacancy_ids": list(processed_ids),
-                            "current_skill_counts": dict(skill_counter),
-                        }
-                    )
+                    processed_since_last_save += 1
+                    
+                    # Сохраняем прогресс каждые save_every вакансий
+                    if processed_since_last_save >= settings.save_every:
+                        logger.debug(f"Сохранение прогресса после {processed_since_last_save} вакансий (save_every={settings.save_every})")
+                        save_progress(
+                            {
+                                "queries": queries,
+                                "mode": settings.mode,
+                                "processed_vacancy_ids": list(processed_ids),
+                                "current_skill_counts": dict(skill_counter),
+                            }
+                        )
+                        processed_since_last_save = 0
+                    
                     # Задержка между запросами (Не допустить перегрев сервера)
-                    time.sleep(0.5)
+                    time.sleep(random.uniform(VACANCY_DELAY_MIN, VACANCY_DELAY_MAX))
 
-                except Exception as e:
-                    # FIXME: Выпадают вакансии
+                except requests.exceptions.RequestException as e:
+                    # Сетевые ошибки или ошибки HTTP
                     logger.error(
-                        f"Неудачная попытка извлечения навыков из вакансии. Error: {e}"
+                        f"Сетевая ошибка при обработке вакансии {id} ({name}): {type(e).__name__}: {e}"
                     )
-                    # Задержка между запросами
-                    logger.info("Жду охлаждения сервера...")
-                    time.sleep(random.uniform(60, 80))
+                    if hasattr(e.response, 'status_code'):
+                        status = e.response.status_code
+                        logger.warning(f"HTTP статус: {status}")
+                        if status == 429:
+                            delay = random.uniform(5, 10)
+                            logger.warning(f"Слишком много запросов. Увеличиваю задержку до {delay:.1f}с.")
+                            time.sleep(delay)
+                        elif status == 403:
+                            delay = random.uniform(5, 15)
+                            logger.warning(f"Ошибка доступа 403. Увеличиваю задержку до {delay:.1f}с.")
+                            # Логируем тело ответа для диагностики
+                            try:
+                                body = e.response.text[:500]
+                                logger.warning(f"Тело ответа 403: {body}")
+                            except:
+                                pass
+                            if is_ddos_guard_response(e.response):
+                                logger.warning(
+                                    "Детали вакансии тоже блокируются через ddos-guard. "
+                                    "С высокой вероятностью проблема уже не в коде запроса, а в репутации IP/канала."
+                                )
+                            time.sleep(delay)
+                        elif status >= 500:
+                            delay = random.uniform(3, 5)
+                            logger.warning(f"Ошибка сервера. Короткая пауза {delay:.1f}с.")
+                            time.sleep(delay)
+                        else:
+                            delay = random.uniform(2, 4)
+                            logger.debug(f"Клиентская ошибка. Пауза {delay:.1f}с.")
+                            time.sleep(delay)
+                    else:
+                        # Общая сетевая ошибка
+                        delay = random.uniform(3, 6)
+                        logger.warning(f"Сетевая ошибка. Пауза {delay:.1f}с.")
+                        time.sleep(delay)
+                    continue
+                except Exception as e:
+                    # Другие ошибки (парсинг, логика)
+                    logger.error(
+                        f"Ошибка при обработке вакансии {id} ({name}): {type(e).__name__}: {e}",
+                        exc_info=True
+                    )
+                    time.sleep(random.uniform(2, 5))
                     continue
 
+    # Финализируем сохранение прогресса (если остались несохранённые вакансии)
+    if processed_since_last_save > 0:
+        logger.debug(f"Финальное сохранение прогресса ({processed_since_last_save} вакансий)")
+        save_progress(
+            {
+                "queries": queries,
+                "mode": settings.mode,
+                "processed_vacancy_ids": list(processed_ids),
+                "current_skill_counts": dict(skill_counter),
+            }
+        )
+    
     logger.info("Вакансии обработаны. ")
     logger.info("Строю результаты...")
     sorted_skills = dict(

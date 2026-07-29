@@ -1158,6 +1158,46 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
 
     logger.info(f"График сохранён как '{file_path}'")
 
+def is_valid_mobilization_vacancy(vacancy: dict) -> bool:
+    """
+    Проверяет, относится ли вакансия к теме мобилизации по её названию.
+    
+    Эта функция служит строгим фильтром для отсечения ложных срабатываний 
+    (например, "Продавец" или "QA Engineer"), которые просачиваются 
+    через неточный поиск или HTML-fallback при блокировке API.
+    
+    Args:
+        vacancy (dict): Словарь с данными вакансии от API или HTML hh.ru.
+        
+    Returns:
+        bool: True, если название содержит целевые ключевые корни, иначе False.
+    """
+    title = vacancy.get("name", "").lower()
+    
+    # Корни слов, которые ОБЯЗАНЫ быть в названии целевой вакансии
+    target_roots = [
+        "мобилизац",
+        "военн",
+        "бронирован",
+        "гражданск оборон",
+        "первый отдел"
+    ]
+    
+    # Слова-маркеры, наличие которых сразу делает вакансию нерелевантной
+    blacklisted_words = [
+        "продавец", "курьер", "кассир", "qa ", "программист", 
+        "разработчик", "пекарь", "водитель", "стоматолог", "врач", "менеджер по продажам"
+    ]
+    
+    # 1. Проверка на наличие запрещенных слов
+    if any(bad_word in title for bad_word in blacklisted_words):
+        return False
+        
+    # 2. Проверка на наличие хотя бы одного целевого корня
+    if any(root in title for root in target_roots):
+        return True
+        
+    return False
 
 def main():
     global AUTO_SOURCE_FORCE_HTML
@@ -1248,12 +1288,9 @@ def main():
                     logger.info("\tПропуск вакансии. Была ранее обработана")
                     continue
 
-                # Фильтр
-                split_query = re.split("\\s|-", query)
-                # Мягкий отсев - должно совпасть хотя бы одно слово
-                regex_query = f"({'|'.join(split_query)})"
-                if not re.search(regex_query, name, re.I):
-                    logger.info("\tОтсев этой вакансии")
+                # Строгий фильтр по названию вакансии для отсечения мусора из HTML-fallback
+                if not is_valid_mobilization_vacancy(v):
+                    logger.info("tОтсев по названию (нерелевантная вакансия)")
                     continue
 
                 # Получение скилов

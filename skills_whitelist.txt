@@ -1,12 +1,14 @@
+# Формат alias-группы: каноническое название | вариант 1 | вариант 2
+# В итоговый CSV записывается первый элемент строки.
+
 # Языки программирования
-1c
+1c | 1с
 c
-c#
+c# | c sharp
 c++
 go
 java
-javascript
-js
+javascript | js
 julia
 lisp
 perl
@@ -16,12 +18,10 @@ r
 ruby
 rust
 scala
-ts
-typescript
+typescript | ts
 
 # Web 
-html
-html5
+html | html5
 nginx
 apache
 OSI
@@ -31,10 +31,10 @@ cassandra
 clickhouse
 databricks
 mongodb
-mssql
+mssql | sql server | microsoft sql server
 mysql
 oracle
-postgresql
+postgresql | postgres
 redis
 snowflake
 sql
@@ -48,8 +48,7 @@ svn
 # Контейнеризация и оркестрация
 docker
 helm
-k8s
-kubernetes
+kubernetes | k8s
 openshift
 podman
 
@@ -91,10 +90,10 @@ mlflow
 openai
 optuna
 polyaxon
-pytorch
+pytorch | torch
 ray
 sagemaker
-scikit-learn
+scikit-learn | sklearn
 sentence-transformers
 tensorflow
 vertex ai
@@ -107,7 +106,7 @@ doc2vec
 gensim
 gpt
 llm
-natural language processing
+natural language processing | nlp
 nltk
 prompt engineering
 rag
@@ -116,7 +115,7 @@ spacy
 stanford corenlp
 t5
 text mining
-tf-idf
+tf-idf | tfidf
 topic modeling
 word2vec
 word embeddings
@@ -125,11 +124,11 @@ word embeddings
 albumentations
 detectron2
 image processing
-opencv
+opencv | open cv
 pillow
-scikit-image
+scikit-image | skimage
 segment anything
-yolo
+yolo | you only look once
 
 # Статистика и анализ
 anova
@@ -145,7 +144,7 @@ regression
 scipy
 stan
 statsmodels
-tsne
+tsne | t-sne
 umap
 
 # ETL / Pipelines
@@ -177,7 +176,7 @@ storm
 
 # Облачные платформы
 app engine
-aws
+aws | amazon web services
 azure
 azure ml studio
 bigquery
@@ -188,7 +187,7 @@ databricks
 data factory
 ec2
 emr
-gcp
+gcp | google cloud platform
 glue
 kaggle
 lambda
@@ -198,12 +197,11 @@ snowflake
 storage account
 synapse
 vertex ai
-yandexcloud
+yandexcloud | yandex cloud
 
 # Операционные системы / Shell
 bash
-cli
-command line
+command line | command-line interface | cli
 fish
 linux
 powershell
@@ -228,14 +226,14 @@ parquet
 protobuf
 toml
 xml
-yaml
+yaml | yml
 
 # API / Web
 api
-rest
+rest | rest api
 graphql
 soap
-web scraping
+web scraping | web-scraping
 selenium
 playwright
 requests
@@ -263,23 +261,20 @@ statistics
 ab testing
 accuracy
 active learning
-ai
-artificial intelligence
+artificial intelligence | ai
 auc
 bias-variance tradeoff
 canary release
 confusion matrix
 cross-validation
-deep learning
-dl
+deep learning | dl
 ensemble methods
 evaluation metrics
 f1 score
 feature engineering
 feature selection
 hyperparameter tuning
-machine learning
-ml
+machine learning | ml
 mlops
 model deployment
 model drift
@@ -320,7 +315,7 @@ looker
 metabase
 microstrategy
 plotly dash
-power bi
+power bi | powerbi
 qlikview
 redash
 streamlit
@@ -350,10 +345,9 @@ memory management
 miniconda
 mock
 multiprocessing
-neovim
+neovim | nvim
 notebook
 nvidia
-nvim
 onnx
 openvino
 parallelism
@@ -364,8 +358,7 @@ poetry
 profiling
 pycharm
 pytest
-regex
-regexps
+regex | regexps | regular expressions
 tensorrt
 threading
 tpu
@@ -417,15 +410,15 @@ alibi
 argo
 bias detection
 captum
-ci/cd
+ci/cd | cicd | continuous integration continuous delivery
 clearml
 containerization
 dagshub
 experiment tracking
 fairness
 feature store
-github actions
-gitlab ci
+github actions | github action
+gitlab ci | gitlab ci/cd
 jenkins
 kubeflow
 lime
@@ -441,4 +434,3 @@ polyaxon
 reproducibility
 shap
 tekton
-

@@ -71,6 +71,7 @@ ai wizard intern
 DEFAULT_SKILLS_WHITELIST_TEMPLATE = """# Автосгенерированный whitelist навыков
 # Скрипт создал его, потому что skills_whitelist.txt не был найден.
 # Редактируйте список под ваши задачи.
+# Формат alias-группы: каноническое название | вариант 1 | вариант 2
 
 python
 sql
@@ -650,49 +651,66 @@ def resolve_processing_mode(settings, vacancy_data: dict) -> str:
     return settings.mode
 
 
-def load_skills_whitelist(path: str = "skills_whitelist.txt") -> set:
+def load_skills_whitelist(path: str = "skills_whitelist.txt") -> dict[str, str]:
     """
-    Загружает белый список навыков из файла.
+    Загружает белый список навыков и их alias из файла.
 
     Строки, начинающиеся с '#', считаются комментариями и игнорируются.
-    Пустые строки также пропускаются. Все навыки приводятся к нижнему регистру.
+    Пустые строки также пропускаются. В строке вида
+    ``каноническое название | alias 1 | alias 2`` первый элемент становится
+    названием навыка в итоговом CSV. Одиночные строки остаются совместимыми
+    с прежним форматом. Все значения приводятся к нижнему регистру.
 
     Args:
         path: Путь к файлу со списком навыков. По умолчанию "skills_whitelist.txt".
 
     Returns:
-        Множество навыков (в нижнем регистре).
+        Словарь ``поисковая фраза -> каноническое название``.
 
     Raises:
         FileNotFoundError: Если файл не найден.
         Exception: Если файл не может быть загружен.
     """
     logger.debug(f"enter load_skills_whitelist({locals()})")
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = [
-                line.strip().lower()
-                for line in f
-                if line.strip() and not line.startswith("#")
-            ]
-        return set(lines)
-
-    except FileNotFoundError:
+    if not os.path.exists(path):
         ensure_default_file(
             path,
             DEFAULT_SKILLS_WHITELIST_TEMPLATE,
             "примерный whitelist навыков",
         )
-        with open(path, encoding="utf-8") as f:
-            lines = [
-                line.strip().lower()
-                for line in f
-                if line.strip() and not line.startswith("#")
+
+    aliases = {}
+    with open(path, encoding="utf-8") as f:
+        for line_number, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            variants = [
+                re.sub(r"\s+", " ", variant.strip().lower())
+                for variant in line.split("|")
+                if variant.strip()
             ]
-        return set(lines)
+            if not variants:
+                continue
+
+            canonical = variants[0]
+            for alias in variants:
+                existing = aliases.get(alias)
+                if existing is not None and existing != canonical:
+                    raise ValueError(
+                        f'Alias "{alias}" в строке {line_number} уже относится '
+                        f'к навыку "{existing}"'
+                    )
+                aliases[alias] = canonical
+
+    return aliases
 
 
-def extract_skills(text: str, skill_whitelist: set | list) -> list:
+def extract_skills(
+    text: str,
+    skill_whitelist: dict[str, str] | set[str] | list[str],
+) -> list:
     """
     Извлекает навыки из текста (например, описание вакансии) с использованием
     регулярных выражений с границами слов.
@@ -704,7 +722,8 @@ def extract_skills(text: str, skill_whitelist: set | list) -> list:
 
     Args:
         text (str): Текст (например, описание вакансии).
-        skill_whitelist (set or list): Множество или список допустимых навыков.
+        skill_whitelist: Словарь alias -> канонический навык либо старый
+            список допустимых навыков.
 
     Returns:
         list: Список найденных навыков (в нижнем регистре).
@@ -712,23 +731,36 @@ def extract_skills(text: str, skill_whitelist: set | list) -> list:
     logger.debug("enter extract_skills(can't show to much data)")
     text_lower = text.lower()
     found_skills = []
+    found_canonical_skills = set()
+
+    if isinstance(skill_whitelist, dict):
+        aliases = skill_whitelist.items()
+    else:
+        aliases = ((skill, skill) for skill in skill_whitelist)
+
+    normalized_aliases = [
+        (
+            re.sub(r"\s+", " ", alias.strip()),
+            re.sub(r"\s+", " ", canonical.strip()),
+        )
+        for alias, canonical in aliases
+    ]
     
-    # Нормализация навыков: удаление лишних пробелов, экранирование для regex
-    normalized_skills = []
-    for skill in skill_whitelist:
-        # Удаляем лишние пробелы по краям и внутри (заменяем множественные пробелы на один)
-        norm = re.sub(r'\s+', ' ', skill.strip())
-        normalized_skills.append(norm)
-    
-    # Сортируем по длине в обратном порядке, чтобы более длинные навыки обрабатывались первыми
-    for skill in sorted(normalized_skills, key=len, reverse=True):
+    # Длинные alias обрабатываются первыми, чтобы исключить частичные совпадения.
+    for alias, canonical in sorted(
+        normalized_aliases,
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
         # Экранируем специальные символы для regex
-        pattern = re.escape(skill)
+        pattern = re.escape(alias)
         # Используем гибкие границы слов: перед навыком не должно быть буквенно-цифрового символа,
         # после навыка тоже не должно быть буквенно-цифрового символа.
         # Это позволяет корректно обрабатывать навыки с дефисами, точками, плюсами и т.д.
         if re.search(r'(?<!\w)' + pattern + r'(?!\w)', text_lower):
-            found_skills.append(skill)
+            if canonical not in found_canonical_skills:
+                found_skills.append(canonical)
+                found_canonical_skills.add(canonical)
             # Удаляем найденный навык из текста, чтобы избежать повторного обнаружения
             # (заменяем на пробел, но сохраняем границы)
             text_lower = re.sub(r'(?<!\w)' + pattern + r'(?!\w)', ' ', text_lower)

@@ -136,6 +136,23 @@ class SmokeTests(unittest.TestCase):
             self.assertIn("python", skills)
             self.assertIn("терпение к легаси", skills)
 
+    def test_skills_whitelist_aliases_return_one_canonical_skill(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            whitelist_path = Path(temp_dir) / "skills_whitelist.txt"
+            whitelist_path.write_text(
+                "kubernetes | k8s\n",
+                encoding="utf-8",
+            )
+
+            skills = parse_skills.load_skills_whitelist(str(whitelist_path))
+            extracted = parse_skills.extract_skills(
+                "Опыт Kubernetes и k8s в production.",
+                skills,
+            )
+
+        self.assertEqual(skills["k8s"], "kubernetes")
+        self.assertEqual(extracted, ["kubernetes"])
+
     def test_auto_source_switches_to_html_after_first_ddos_block(self):
         with mock.patch.object(parse_skills, "get_vacancies_from_api") as api_mock, mock.patch.object(
             parse_skills, "get_vacancies_from_html", return_value=[{"id": "1", "name": "x"}]

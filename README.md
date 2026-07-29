@@ -41,7 +41,26 @@ python resume.py
 Сбор проходит по Москве, Санкт-Петербургу и федеральным округам. Для каждого региона `parse_skills.py` вызывается с параметрами:
 
 ```text
---source=html --mode=description --html-description-fallback --no-chart
+run --source=html --mode=description --html-description-fallback --no-chart
+```
+
+## Команды `parse_skills.py`
+
+```bash
+# Показать справку; пустой вызов делает то же самое
+python parse_skills.py help
+
+# Обычный одиночный сбор
+python parse_skills.py run --source html --mode description
+
+# Построить PNG из уже собранной общей статистики, без сетевого сбора
+python parse_skills.py chart --chart-input top_skills_rf.csv -o top_skills_rf.png
+```
+
+`chart` не меняет CSV и не обращается к HH. Для него нужен `matplotlib`:
+
+```bash
+pip install -e ".[chart]"
 ```
 
 ## Входные файлы
@@ -81,6 +100,7 @@ Alias объединяет только варианты одного навык
 - `skills_<area_id>.csv` — статистика навыков по региону;
 - `progress_<area_id>.json` — состояние незавершённого регионального сбора;
 - `top_skills_rf.csv` — суммарная статистика после успешного прохода всех регионов;
+- `top_skills_rf.png` — график, созданный командой `chart` из итогового CSV;
 - `start.log` — журнал orchestration-скриптов рядом с `start.py`.
 
 Лог ограничен: 1 MiB на файл, не более двух архивов (`start.log.1`, `start.log.2`). Логи отдельных вакансий в него не дублируются, чтобы не создавать лишнюю запись на диск.

@@ -74,7 +74,7 @@ def run_parser_for_area(area_id: int, area_name: str, output_csv: str) -> bool:
     """
     logger.info(f"Старт парсинга региона: {area_name} (ID: {area_id})")
     command = [
-        sys.executable, "parse_skills.py",
+        sys.executable, "parse_skills.py", "run",
         f"--area={area_id}",
         "--mode=description",
         "--source=html",

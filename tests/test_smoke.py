@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import parse_skills
+import start
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,7 @@ SCRIPT_PATH = REPO_ROOT / "parse_skills.py"
 class SmokeTests(unittest.TestCase):
     def test_help_command_succeeds(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--help"],
+            [sys.executable, str(SCRIPT_PATH), "help"],
             capture_output=True,
             text=True,
             check=False,
@@ -26,6 +27,38 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--source", result.stdout)
         self.assertIn("--no-chart", result.stdout)
+
+    def test_no_arguments_shows_help_without_starting_collection(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("chart", result.stdout)
+        self.assertIn("run", result.stdout)
+
+    def test_commands_require_explicit_command_name(self):
+        self.assertEqual(parse_skills.parse_command_arguments([]), ("help", []))
+        self.assertEqual(
+            parse_skills.parse_command_arguments(["run", "--no-chart"]),
+            ("run", ["--no-chart"]),
+        )
+        self.assertEqual(
+            parse_skills.parse_command_arguments(["chart", "--chart-input", "saved.csv"]),
+            ("chart", ["--chart-input", "saved.csv"]),
+        )
+        with self.assertRaises(SystemExit):
+            parse_skills.parse_command_arguments(["--help"])
+
+    def test_orchestrator_invokes_parser_run_command(self):
+        with mock.patch.object(start.subprocess, "run") as run_mock:
+            start.run_parser_for_area(1, "Москва", "missing-test-output.csv")
+
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], [sys.executable, "parse_skills.py", "run"])
 
     def test_parse_html_vacancy_page_extracts_title_description_and_skills(self):
         html_text = """
@@ -94,6 +127,34 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(rows[0], ["Count", "Skill"])
         self.assertEqual(rows[1], ["3", "python"])
         self.assertEqual(rows[2], ["2", "sql"])
+
+    def test_generate_chart_loads_existing_csv_without_collection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "skills.csv"
+            input_path.write_text(
+                "Count,Skill\n3,python\n2,sql\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(parse_skills, "pyplot", object()), mock.patch.object(
+                parse_skills, "save_result_chart"
+            ) as chart_mock:
+                parse_skills.generate_chart_from_csv(
+                    str(input_path),
+                    "chart.png",
+                    10,
+                )
+
+        chart_mock.assert_called_once_with(
+            {"python": 3, "sql": 2},
+            skills_show_count=10,
+            file_path="chart.png",
+        )
+
+    def test_cli_accepts_chart_input_argument(self):
+        settings = parse_skills.cli_parse(["--chart-input", "saved.csv"])
+
+        self.assertEqual(settings.chart_input, "saved.csv")
 
     def test_load_queries_creates_default_file_when_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

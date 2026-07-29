@@ -13,6 +13,7 @@ import re
 import sys
 import time
 from collections import Counter
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -889,16 +890,17 @@ def cli_parse(argv: list[str] | None = None):
             "  skills_whitelist.txt — список навыков для анализа [только для --mode description]"
         ),
         epilog="",
-        add_help=True,
+        add_help=False,
     )
     prog_name = parser.prog
     parser.epilog = (
         "Примеры использования:\n"
-        f"  {prog_name} -a 1 -o skills.png\n"
-        f"  {prog_name} --mode description --skills-show-count 30\n"
-        f"  {prog_name} --vacancies-limit 1000 --save-every 20\n"
+        f"  {prog_name} run -a 1 -o skills.png\n"
+        f"  {prog_name} run --mode description --skills-show-count 30\n"
+        f"  {prog_name} run --vacancies-limit 1000 --save-every 20\n"
+        f"  {prog_name} chart\n"
         "\n"
-        "Для получения справки используйте --help или -h."
+        "Команды: help, run, chart."
     )
 
     parser.add_argument(
@@ -1047,6 +1049,12 @@ def cli_parse(argv: list[str] | None = None):
     )
 
     parser.add_argument(
+        "--chart-input",
+        default="top_skills_all_data.csv",
+        help="CSV-источник для команды chart (%(default)s)",
+    )
+
+    parser.add_argument(
         "--env-file",
         default=os.environ.get("HH_ENV_FILE", ".env"),
         help="Путь к .env-файлу с переменными окружения (%(default)s)",
@@ -1174,6 +1182,53 @@ def save_result_csv(sorted_skills, file_path="top_skills_all_data.csv"):
     logger.info(f"Весь отсортированный список сохранен в файл {file_path}")
 
 
+def load_result_csv(file_path: str) -> dict[str, int]:
+    """Загружает ранее сохранённую статистику навыков из CSV."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"CSV со статистикой не найден: {path}")
+
+    skills = {}
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames != ["Count", "Skill"]:
+            raise ValueError(
+                f"Некорректный формат {path}: ожидались колонки Count и Skill"
+            )
+        for line_number, row in enumerate(reader, start=2):
+            skill = row["Skill"].strip()
+            if not skill:
+                continue
+            try:
+                count = int(row["Count"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Некорректное значение Count в {path}, строка {line_number}"
+                ) from error
+            skills[skill] = count
+
+    if not skills:
+        raise ValueError(f"CSV со статистикой пуст: {path}")
+    return dict(sorted(skills.items(), key=lambda item: item[1], reverse=True))
+
+
+def generate_chart_from_csv(
+    csv_path: str,
+    output_path: str,
+    skills_show_count: int,
+) -> None:
+    """Строит график из ранее сохранённого CSV без сетевого сбора."""
+    if pyplot is None:
+        raise RuntimeError(
+            "Для команды chart установите поддержку графиков: pip install -e '.[chart]'"
+        )
+    save_result_chart(
+        load_result_csv(csv_path),
+        skills_show_count=skills_show_count,
+        file_path=output_path,
+    )
+
+
 @animate(start="Построение графика")
 def save_result_chart(sorted_skills, skills_show_count, file_path):
     if pyplot is None:
@@ -1273,9 +1328,60 @@ def is_valid_mobilization_vacancy(vacancy: dict) -> bool:
         
     return False
 
+
+def parse_command_arguments(argv: list[str]) -> tuple[str, list[str]]:
+    """Разбирает команду верхнего уровня и её опции."""
+    if not argv:
+        return "help", []
+
+    command, *command_argv = argv
+    if command == "help":
+        if command_argv:
+            raise SystemExit("Команда help не принимает опции")
+        return command, command_argv
+    if command in {"run", "chart"}:
+        if any(argument in {"-h", "--help"} for argument in command_argv):
+            raise SystemExit("Для справки используйте: parse_skills.py help")
+        return command, command_argv
+    raise SystemExit(
+        "Неизвестная команда. Доступны: help, run, chart. "
+        "Справка: parse_skills.py help"
+    )
+
+
+def print_help() -> None:
+    """Печатает справку по командам и их опциям."""
+    print(
+        "Команды:\n"
+        "  help              показать эту справку\n"
+        "  run [опции]       собрать вакансии и сохранить результаты\n"
+        "  chart [опции]     построить PNG из сохранённого CSV без сбора\n"
+        "\n"
+        "Основные опции run:\n"
+        "  -a, --area ID\n"
+        "  -m, --mode {key-skills,description,both}\n"
+        "  --source {auto,api,html}\n"
+        "  --vacancies-limit N\n"
+        "  --no-chart\n"
+        "\n"
+        "Опции chart:\n"
+        "  --chart-input FILE    CSV-источник (по умолчанию top_skills_all_data.csv)\n"
+        "  -o, --output FILE     PNG-файл (по умолчанию hh_skills_bar_chart.png)\n"
+        "  --skills-show-count N\n"
+        "\n"
+        "Пример: parse_skills.py run --source html --mode description\n"
+        "Пример: parse_skills.py chart --chart-input top_skills_rf.csv -o chart.png"
+    )
+
+
 def main():
     global AUTO_SOURCE_FORCE_HTML
     AUTO_SOURCE_FORCE_HTML = False
+
+    command, command_argv = parse_command_arguments(sys.argv[1:])
+    if command == "help":
+        print_help()
+        return
 
     # Logging
     log_level = os.environ.get("LOGLEVEL", "INFO").upper()
@@ -1285,11 +1391,23 @@ def main():
     logger.setLevel(log_level)
 
     # Настройка параметров (конфигурация)
-    bootstrap_settings, remaining_argv = parse_bootstrap_args()
+    bootstrap_settings, remaining_argv = parse_bootstrap_args(command_argv)
     if not bootstrap_settings.no_dotenv:
         load_dotenv_file(bootstrap_settings.env_file)
 
     settings = cli_parse(remaining_argv)
+    if command == "chart":
+        try:
+            generate_chart_from_csv(
+                settings.chart_input,
+                settings.output,
+                settings.skills_show_count,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as error:
+            logger.critical(str(error))
+            raise SystemExit(2) from error
+        return
+
     configure_http_session(settings)
     queries = load_queries()
 

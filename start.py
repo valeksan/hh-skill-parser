@@ -13,12 +13,25 @@ import csv
 import sys
 from collections import Counter
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-# Настройка логирования
+LOG_FILE = Path(__file__).resolve().with_name("start.log")
+
+# INFO-лог оркестратора: ограничен 1 MiB и двумя архивами, запись открывается лениво.
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=1_024 * 1_024,
+            backupCount=2,
+            encoding="utf-8",
+            delay=True,
+        ),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -37,6 +50,19 @@ REGIONS = {
     "Дальневосточный ФО": 8,
 }
 
+def clean_previous_results() -> None:
+    """Удаляет результаты и прогресс предыдущего полного запуска."""
+    generated_files = [Path("top_skills_rf.csv")]
+    for area_id in REGIONS.values():
+        generated_files.extend(
+            [Path(f"skills_{area_id}.csv"), Path(f"progress_{area_id}.json")]
+        )
+
+    for path in generated_files:
+        path.unlink(missing_ok=True)
+    logger.info("Удалены результаты и progress предыдущего запуска")
+
+
 def run_parser_for_area(area_id: int, area_name: str, output_csv: str) -> bool:
     """
     Запускает парсер hh-skill-parser для конкретного региона.
@@ -47,15 +73,11 @@ def run_parser_for_area(area_id: int, area_name: str, output_csv: str) -> bool:
         output_csv (str): Путь, куда сохранить итоговый CSV для этого региона.
     """
     logger.info(f"Старт парсинга региона: {area_name} (ID: {area_id})")
-    # Старый CSV не должен попасть в новую агрегацию после неудачного запуска.
-    Path(output_csv).unlink(missing_ok=True)
-    Path(f"progress_{area_id}.json").unlink(missing_ok=True)
-    
     command = [
         sys.executable, "parse_skills.py",
         f"--area={area_id}",
         "--mode=description",
-        "--source=auto",
+        "--source=html",
         "--html-description-fallback",
         "--no-chart",
         f"--csv-output={output_csv}",
@@ -107,18 +129,28 @@ def aggregate_results(csv_files: list[str]) -> Counter:
                         
     return total_skills
 
-if __name__ == "__main__":
-    logger.info("Начат обход регионов РФ для сбора мобилизационных вакансий...")
-    Path("top_skills_rf.csv").unlink(missing_ok=True)
+def run_collection(resume: bool = False) -> None:
+    """Собирает вакансии с нуля или продолжает незавершённый запуск."""
+    if resume:
+        logger.info("Продолжаю незавершённый обход регионов РФ...")
+    else:
+        clean_previous_results()
+        logger.info("Начат новый обход регионов РФ для сбора мобилизационных вакансий...")
+
     saved_files = []
-    
+
     # Проходим по всем федеральным округам, собирая данные кусками
     for name, area_id in REGIONS.items():
         region_csv = f"skills_{area_id}.csv"
+        if resume and Path(region_csv).exists():
+            logger.info("Регион %s уже завершён; пропускаю", name)
+            saved_files.append(region_csv)
+            continue
+
         if not run_parser_for_area(area_id, name, region_csv):
             logger.critical(
                 "Итог по РФ не построен: сбор остановлен на регионе %s. "
-                "Исправьте доступ к HH (другой IP или разрешённый proxy) и перезапустите.",
+                "Исправьте причину и запустите resume.py для продолжения.",
                 name,
             )
             raise SystemExit(2)
@@ -138,3 +170,7 @@ if __name__ == "__main__":
     print("="*60)
     for skill, count in final_stats.most_common(20):
         print(f"{count:4d} | {skill}")
+
+
+if __name__ == "__main__":
+    run_collection()

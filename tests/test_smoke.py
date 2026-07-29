@@ -105,6 +105,33 @@ class SmokeTests(unittest.TestCase):
             self.assertGreater(len(queries), 0)
             self.assertIn("ai wizard intern", queries)
 
+    def test_queries_are_normalized_and_quoted_once_for_hh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queries_path = Path(temp_dir) / "queries.txt"
+            queries_path.write_text(
+                '"Специалист по военному учету"\n'
+                "Начальник мобилизационного отдела\n",
+                encoding="utf-8",
+            )
+
+            queries = parse_skills.load_queries(str(queries_path))
+
+        self.assertEqual(
+            queries,
+            [
+                "Специалист по военному учету",
+                "Начальник мобилизационного отдела",
+            ],
+        )
+        self.assertEqual(
+            parse_skills.build_exact_search_query(queries[0]),
+            '"Специалист по военному учету"',
+        )
+        self.assertEqual(
+            parse_skills.build_exact_search_query('"Специалист по военному учету"'),
+            '"Специалист по военному учету"',
+        )
+
     def test_load_skills_whitelist_creates_default_file_when_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             whitelist_path = Path(temp_dir) / "skills_whitelist.txt"
@@ -114,6 +141,41 @@ class SmokeTests(unittest.TestCase):
             self.assertTrue(whitelist_path.exists())
             self.assertIn("python", skills)
             self.assertIn("терпение к легаси", skills)
+
+    def test_skills_whitelist_aliases_return_one_canonical_skill(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            whitelist_path = Path(temp_dir) / "skills_whitelist.txt"
+            whitelist_path.write_text(
+                "воинский учет | военный учет | ведение воинского учета\n",
+                encoding="utf-8",
+            )
+
+            skills = parse_skills.load_skills_whitelist(str(whitelist_path))
+            extracted = parse_skills.extract_skills(
+                "Ведение воинского учета и военный учет сотрудников.",
+                skills,
+            )
+
+        self.assertEqual(skills["военный учет"], "воинский учет")
+        self.assertEqual(extracted, ["воинский учет"])
+
+    def test_mobilization_title_filter_covers_added_query_categories(self):
+        accepted_titles = [
+            "Специалист по воинскому учету",
+            "Специалист по ГО и ЧС",
+            "Главный специалист режимно-секретного подразделения",
+            "Специалист по защите государственной тайны",
+        ]
+
+        for title in accepted_titles:
+            self.assertTrue(
+                parse_skills.is_valid_mobilization_vacancy({"name": title}),
+                title,
+            )
+
+        self.assertFalse(
+            parse_skills.is_valid_mobilization_vacancy({"name": "Специалист по продажам"})
+        )
 
     def test_auto_source_switches_to_html_after_first_ddos_block(self):
         with mock.patch.object(parse_skills, "get_vacancies_from_api") as api_mock, mock.patch.object(

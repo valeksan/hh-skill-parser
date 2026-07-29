@@ -486,7 +486,7 @@ def get_vacancies_from_api(query: str, area: int, vacancies_limit: int = 2000) -
     # API: https://api.hh.ru/openapi/redoc#tag/Poisk-vakansij/operation/get-vacancies
     base_url = "https://api.hh.ru/vacancies"
     params = {
-        "text": query,
+        "text": build_exact_search_query(query),
         "area": area,
         "per_page": 100,
         "page": 0,
@@ -553,7 +553,7 @@ def get_vacancies_from_html(query: str, area: int, vacancies_limit: int = 2000) 
 
     for page_current in range(pages_total):
         params = {
-            "text": query,
+            "text": build_exact_search_query(query),
             "area": area,
             "page": page_current,
         }
@@ -736,6 +736,24 @@ def extract_skills(text: str, skill_whitelist: set | list) -> list:
     return found_skills
 
 
+def normalize_search_query(query: str) -> str:
+    """Удаляет внешние кавычки, оставляя чистую поисковую фразу."""
+    normalized = query.strip()
+    if (
+        len(normalized) >= 2
+        and normalized[0] == normalized[-1]
+        and normalized[0] in {'"', "'"}
+    ):
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
+def build_exact_search_query(query: str) -> str:
+    """Один раз оборачивает поисковую фразу в двойные кавычки для HH."""
+    normalized = normalize_search_query(query)
+    return f'"{normalized}"'
+
+
 def load_queries(path: str = "queries.txt") -> list:
     """
     Загружает список поисковых запросов (названий вакансий) из файла.
@@ -757,7 +775,9 @@ def load_queries(path: str = "queries.txt") -> list:
     try:
         with open(path, encoding="utf-8") as f:
             lines = [
-                line.strip() for line in f if line.strip() and not line.startswith("#")
+                normalize_search_query(line)
+                for line in f
+                if line.strip() and not line.startswith("#")
             ]
         queries = [query for query in lines if query]
         return queries
@@ -769,7 +789,9 @@ def load_queries(path: str = "queries.txt") -> list:
         )
         with open(path, encoding="utf-8") as f:
             lines = [
-                line.strip() for line in f if line.strip() and not line.startswith("#")
+                normalize_search_query(line)
+                for line in f
+                if line.strip() and not line.startswith("#")
             ]
         queries = [query for query in lines if query]
         return queries

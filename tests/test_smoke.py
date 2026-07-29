@@ -105,6 +105,27 @@ class SmokeTests(unittest.TestCase):
             self.assertGreater(len(queries), 0)
             self.assertIn("ai wizard intern", queries)
 
+    def test_queries_are_normalized_and_quoted_once_for_hh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queries_path = Path(temp_dir) / "queries.txt"
+            queries_path.write_text(
+                '"data scientist"\n'
+                "machine learning\n",
+                encoding="utf-8",
+            )
+
+            queries = parse_skills.load_queries(str(queries_path))
+
+        self.assertEqual(queries, ["data scientist", "machine learning"])
+        self.assertEqual(
+            parse_skills.build_exact_search_query(queries[0]),
+            '"data scientist"',
+        )
+        self.assertEqual(
+            parse_skills.build_exact_search_query('"data scientist"'),
+            '"data scientist"',
+        )
+
     def test_load_skills_whitelist_creates_default_file_when_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             whitelist_path = Path(temp_dir) / "skills_whitelist.txt"

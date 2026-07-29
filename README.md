@@ -157,6 +157,17 @@ make bundle
 
    # Минимальный режим без PNG-графика
    ./parse_skills.py run --no-chart
+
+   # Восстановить график из уже сохранённого CSV, без нового сбора вакансий
+   ./parse_skills.py run --generate-chart
+
+   # Восстановить график из другого CSV и задать имя PNG
+   ./parse_skills.py run --generate-chart --chart-input saved_skills.csv -o restored_chart.png
+   ```
+
+   `--generate-chart` не собирает вакансии и не меняет CSV. Для него нужен `matplotlib`:
+   ```bash
+   pip install -e ".[chart]"
    ```
 
 3. **Типовые рабочие команды**

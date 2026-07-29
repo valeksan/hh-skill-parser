@@ -17,7 +17,7 @@ SCRIPT_PATH = REPO_ROOT / "parse_skills.py"
 class SmokeTests(unittest.TestCase):
     def test_help_command_succeeds(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--help"],
+            [sys.executable, str(SCRIPT_PATH), "help"],
             capture_output=True,
             text=True,
             check=False,
@@ -39,14 +39,20 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("--source", result.stdout)
         self.assertIn("run", result.stdout)
 
-    def test_run_arguments_require_explicit_command(self):
-        self.assertEqual(parse_skills.parse_run_arguments([]), ["--help"])
+    def test_commands_require_explicit_command_name(self):
+        self.assertEqual(parse_skills.parse_command_arguments([]), ("help", []))
         self.assertEqual(
-            parse_skills.parse_run_arguments(["run", "--no-chart"]),
-            ["--no-chart"],
+            parse_skills.parse_command_arguments(["run", "--no-chart"]),
+            ("run", ["--no-chart"]),
+        )
+        self.assertEqual(
+            parse_skills.parse_command_arguments(["chart", "--chart-input", "saved.csv"]),
+            ("chart", ["--chart-input", "saved.csv"]),
         )
         with self.assertRaises(SystemExit):
-            parse_skills.parse_run_arguments(["--no-chart"])
+            parse_skills.parse_command_arguments(["--no-chart"])
+        with self.assertRaises(SystemExit):
+            parse_skills.parse_command_arguments(["run", "--help"])
 
     def test_parse_html_vacancy_page_extracts_title_description_and_skills(self):
         html_text = """
@@ -139,12 +145,9 @@ class SmokeTests(unittest.TestCase):
             file_path="chart.png",
         )
 
-    def test_cli_accepts_generate_chart_arguments(self):
-        settings = parse_skills.cli_parse(
-            ["--generate-chart", "--chart-input", "saved.csv"]
-        )
+    def test_cli_accepts_chart_input_argument(self):
+        settings = parse_skills.cli_parse(["--chart-input", "saved.csv"])
 
-        self.assertTrue(settings.generate_chart)
         self.assertEqual(settings.chart_input, "saved.csv")
 
     def test_load_queries_creates_default_file_when_missing(self):

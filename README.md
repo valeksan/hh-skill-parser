@@ -143,7 +143,7 @@ make bundle
    ./parse_skills.py run
 
    # Для получения справки
-   ./parse_skills.py --help
+   ./parse_skills.py help
 
    # Если API HH блокируется, можно сразу использовать HTML-источник
    ./parse_skills.py run --source html --mode description
@@ -159,13 +159,13 @@ make bundle
    ./parse_skills.py run --no-chart
 
    # Восстановить график из уже сохранённого CSV, без нового сбора вакансий
-   ./parse_skills.py run --generate-chart
+   ./parse_skills.py chart
 
    # Восстановить график из другого CSV и задать имя PNG
-   ./parse_skills.py run --generate-chart --chart-input saved_skills.csv -o restored_chart.png
+   ./parse_skills.py chart --chart-input saved_skills.csv -o restored_chart.png
    ```
 
-   `--generate-chart` не собирает вакансии и не меняет CSV. Для него нужен `matplotlib`:
+   Команда `chart` не собирает вакансии и не меняет CSV. Для неё нужен `matplotlib`:
    ```bash
    pip install -e ".[chart]"
    ```

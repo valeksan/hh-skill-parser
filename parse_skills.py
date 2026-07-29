@@ -888,7 +888,7 @@ def cli_parse(argv: list[str] | None = None):
             "  skills_whitelist.txt — список навыков для анализа [только для --mode description]"
         ),
         epilog="",
-        add_help=True,
+        add_help=False,
     )
     prog_name = parser.prog
     parser.epilog = (
@@ -896,9 +896,9 @@ def cli_parse(argv: list[str] | None = None):
         f"  {prog_name} run -a 1 -o skills.png\n"
         f"  {prog_name} run --mode description --skills-show-count 30\n"
         f"  {prog_name} run --vacancies-limit 1000 --save-every 20\n"
-        f"  {prog_name} run --generate-chart\n"
+        f"  {prog_name} chart\n"
         "\n"
-        "Для запуска используйте команду run. Для получения справки используйте --help или -h."
+        "Команды: help, run, chart."
     )
 
     parser.add_argument(
@@ -1035,15 +1035,9 @@ def cli_parse(argv: list[str] | None = None):
     )
 
     parser.add_argument(
-        "--generate-chart",
-        action="store_true",
-        help="Построить PNG из сохранённого CSV без сбора вакансий",
-    )
-
-    parser.add_argument(
         "--chart-input",
         default="top_skills_all_data.csv",
-        help="CSV-источник для --generate-chart (%(default)s)",
+        help="CSV-источник для команды chart (%(default)s)",
     )
 
     parser.add_argument(
@@ -1274,17 +1268,48 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
     logger.info(f"График сохранён как '{file_path}'")
 
 
-def parse_run_arguments(argv: list[str]) -> list[str]:
-    """Требует явную команду run и без аргументов открывает справку."""
+def parse_command_arguments(argv: list[str]) -> tuple[str, list[str]]:
+    """Разбирает команду верхнего уровня и её опции."""
     if not argv:
-        return ["--help"]
-    if argv[0] == "run":
-        return argv[1:]
-    if argv[0] in {"-h", "--help"}:
-        return ["--help"]
+        return "help", []
+
+    command, *command_argv = argv
+    if command == "help":
+        if command_argv:
+            raise SystemExit("Команда help не принимает опции")
+        return command, command_argv
+    if command in {"run", "chart"}:
+        if any(argument in {"-h", "--help"} for argument in command_argv):
+            raise SystemExit("Для справки используйте: parse_skills.py help")
+        return command, command_argv
     raise SystemExit(
-        "Для запуска используйте: parse_skills.py run [опции]. "
-        "Справка: parse_skills.py --help"
+        "Неизвестная команда. Доступны: help, run, chart. "
+        "Справка: parse_skills.py help"
+    )
+
+
+def print_help() -> None:
+    """Печатает справку по командам и их опциям."""
+    print(
+        "Команды:\n"
+        "  help              показать эту справку\n"
+        "  run [опции]       собрать вакансии и сохранить результаты\n"
+        "  chart [опции]     построить PNG из сохранённого CSV без сбора\n"
+        "\n"
+        "Основные опции run:\n"
+        "  -a, --area ID\n"
+        "  -m, --mode {key-skills,description,both}\n"
+        "  --source {auto,api,html}\n"
+        "  --vacancies-limit N\n"
+        "  --no-chart\n"
+        "\n"
+        "Опции chart:\n"
+        "  --chart-input FILE    CSV-источник (по умолчанию top_skills_all_data.csv)\n"
+        "  -o, --output FILE     PNG-файл (по умолчанию hh_skills_bar_chart.png)\n"
+        "  --skills-show-count N\n"
+        "\n"
+        "Пример: parse_skills.py run --source html --mode description\n"
+        "Пример: parse_skills.py chart --chart-input saved.csv -o chart.png"
     )
 
 
@@ -1292,9 +1317,9 @@ def main():
     global AUTO_SOURCE_FORCE_HTML
     AUTO_SOURCE_FORCE_HTML = False
 
-    run_argv = parse_run_arguments(sys.argv[1:])
-    if run_argv == ["--help"]:
-        cli_parse(run_argv)
+    command, command_argv = parse_command_arguments(sys.argv[1:])
+    if command == "help":
+        print_help()
         return
 
     # Logging
@@ -1305,12 +1330,12 @@ def main():
     logger.setLevel(log_level)
 
     # Настройка параметров (конфигурация)
-    bootstrap_settings, remaining_argv = parse_bootstrap_args(run_argv)
+    bootstrap_settings, remaining_argv = parse_bootstrap_args(command_argv)
     if not bootstrap_settings.no_dotenv:
         load_dotenv_file(bootstrap_settings.env_file)
 
     settings = cli_parse(remaining_argv)
-    if settings.generate_chart:
+    if command == "chart":
         try:
             generate_chart_from_csv(
                 settings.chart_input,

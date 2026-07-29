@@ -130,46 +130,49 @@ make bundle
 
 2. **Запуск**
    ```bash
-   # Стандартный запуск
+   # Без аргументов выводится справка
    python parse_skills.py
 
+   # Стандартный запуск
+   python parse_skills.py run
+
    # Если проект установлен как пакет, доступен entry point
-   hh-skill-parser
+   hh-skill-parser run
 
    # На UNIX
-   ./parse_skills.py
+   ./parse_skills.py run
 
    # Для получения справки
    ./parse_skills.py --help
 
    # Если API HH блокируется, можно сразу использовать HTML-источник
-   ./parse_skills.py --source html --mode description
+   ./parse_skills.py run --source html --mode description
 
    # Если выбран key-skills, но вакансии приходят из HTML,
    # можно автоматически переключаться на description
-   ./parse_skills.py --source auto --mode key-skills --html-description-fallback
+   ./parse_skills.py run --source auto --mode key-skills --html-description-fallback
 
    # Комбинированный режим: key_skills + description с дедупом на вакансию
-   ./parse_skills.py --mode both
+   ./parse_skills.py run --mode both
 
    # Минимальный режим без PNG-графика
-   ./parse_skills.py --no-chart
+   ./parse_skills.py run --no-chart
    ```
 
 3. **Типовые рабочие команды**
    ```bash
    # Комбинированный сбор навыков без двойного учёта по одной вакансии
-   ./parse_skills.py --mode both --source auto --html-description-fallback
+   ./parse_skills.py run --mode both --source auto --html-description-fallback
 
    # Самый живучий режим при блокировке API
-   ./parse_skills.py --source html --mode description --no-chart
+   ./parse_skills.py run --source html --mode description --no-chart
 
    # Если хочется оставить key-skills, но не терять HTML-результаты
-   ./parse_skills.py --source auto --mode key-skills --html-description-fallback
+   ./parse_skills.py run --source auto --mode key-skills --html-description-fallback
 
    # Если ранее был пустой прогресс и много processed_vacancy_ids
    rm -f progress.json
-   ./parse_skills.py --source html --mode description
+   ./parse_skills.py run --source html --mode description
    ```
 ___
 4. **Результаты**
@@ -199,7 +202,7 @@ make smoke
 Пример:
 ```bash
 cp .env.example .env
-./parse_skills.py
+./parse_skills.py run
 ```
 
 Если нужен другой путь, используйте `--env-file custom.env`. Чтобы полностью отключить загрузку `.env`, передайте `--no-dotenv`.
@@ -210,7 +213,7 @@ cp .env.example .env
 
 Пример использования:
 ```bash
-LOGLEVEL=info ./parse_skills.py
+LOGLEVEL=info ./parse_skills.py run
 ```
 
 ### HH_NO_CHART
@@ -218,7 +221,7 @@ LOGLEVEL=info ./parse_skills.py
 
 Пример:
 ```bash
-HH_NO_CHART=1 ./parse_skills.py
+HH_NO_CHART=1 ./parse_skills.py run
 ```
 
 ### HTTPS_PROXY / HTTP_PROXY
@@ -226,7 +229,7 @@ HH_NO_CHART=1 ./parse_skills.py
 
 Пример:
 ```bash
-HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py
+HTTPS_PROXY='http://127.0.0.1:8080' ./parse_skills.py run
 ```
 
 Важно: `127.0.0.1:8080` здесь только пример. Такой адрес сработает лишь если у вас уже запущен локальный proxy-сервер на этом порту.

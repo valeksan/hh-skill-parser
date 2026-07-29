@@ -1,6 +1,6 @@
 PYTHON ?= python3
 PIP := $(PYTHON) -m pip
-RUN := $(PYTHON) parse_skills.py
+RUN := $(PYTHON) parse_skills.py run
 PYINSTALLER ?= pyinstaller
 BINARY_NAME ?= hh-skill-parser
 

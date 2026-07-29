@@ -892,11 +892,11 @@ def cli_parse(argv: list[str] | None = None):
     prog_name = parser.prog
     parser.epilog = (
         "Примеры использования:\n"
-        f"  {prog_name} -a 1 -o skills.png\n"
-        f"  {prog_name} --mode description --skills-show-count 30\n"
-        f"  {prog_name} --vacancies-limit 1000 --save-every 20\n"
+        f"  {prog_name} run -a 1 -o skills.png\n"
+        f"  {prog_name} run --mode description --skills-show-count 30\n"
+        f"  {prog_name} run --vacancies-limit 1000 --save-every 20\n"
         "\n"
-        "Для получения справки используйте --help или -h."
+        "Для запуска используйте команду run. Для получения справки используйте --help или -h."
     )
 
     parser.add_argument(
@@ -1213,9 +1213,28 @@ def save_result_chart(sorted_skills, skills_show_count, file_path):
     logger.info(f"График сохранён как '{file_path}'")
 
 
+def parse_run_arguments(argv: list[str]) -> list[str]:
+    """Требует явную команду run и без аргументов открывает справку."""
+    if not argv:
+        return ["--help"]
+    if argv[0] == "run":
+        return argv[1:]
+    if argv[0] in {"-h", "--help"}:
+        return ["--help"]
+    raise SystemExit(
+        "Для запуска используйте: parse_skills.py run [опции]. "
+        "Справка: parse_skills.py --help"
+    )
+
+
 def main():
     global AUTO_SOURCE_FORCE_HTML
     AUTO_SOURCE_FORCE_HTML = False
+
+    run_argv = parse_run_arguments(sys.argv[1:])
+    if run_argv == ["--help"]:
+        cli_parse(run_argv)
+        return
 
     # Logging
     log_level = os.environ.get("LOGLEVEL", "INFO").upper()
@@ -1225,7 +1244,7 @@ def main():
     logger.setLevel(log_level)
 
     # Настройка параметров (конфигурация)
-    bootstrap_settings, remaining_argv = parse_bootstrap_args()
+    bootstrap_settings, remaining_argv = parse_bootstrap_args(run_argv)
     if not bootstrap_settings.no_dotenv:
         load_dotenv_file(bootstrap_settings.env_file)
 

@@ -27,6 +27,27 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("--source", result.stdout)
         self.assertIn("--no-chart", result.stdout)
 
+    def test_no_arguments_shows_help_without_starting_collection(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--source", result.stdout)
+        self.assertIn("run", result.stdout)
+
+    def test_run_arguments_require_explicit_command(self):
+        self.assertEqual(parse_skills.parse_run_arguments([]), ["--help"])
+        self.assertEqual(
+            parse_skills.parse_run_arguments(["run", "--no-chart"]),
+            ["--no-chart"],
+        )
+        with self.assertRaises(SystemExit):
+            parse_skills.parse_run_arguments(["--no-chart"])
+
     def test_parse_html_vacancy_page_extracts_title_description_and_skills(self):
         html_text = """
         <html>

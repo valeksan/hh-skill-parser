@@ -211,6 +211,18 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--max-pages", type=int, default=20)
     add_transport_arguments(resume)
 
+    retry = commands.add_parser("retry", help="retry unresolved search/card units in one run")
+    retry.add_argument("--config")
+    add_database_arguments(retry)
+    retry.add_argument("--run-id", required=True, type=int)
+    retry.add_argument("--max-attempts", type=nonnegative_int, default=3)
+    add_transport_arguments(retry)
+
+    coverage = commands.add_parser("coverage", help="report persisted collection coverage; no network")
+    coverage.add_argument("--config")
+    add_database_arguments(coverage)
+    coverage.add_argument("--run-id", required=True, type=int)
+
     extract = commands.add_parser("extract", help="derive offline data from stored snapshots")
     extract.add_argument("--config")
     add_database_arguments(extract)
@@ -443,6 +455,25 @@ def run_resume(
     )
 
 
+def run_retry(settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source) -> dict[str, int]:
+    database = database_for(settings)
+    database.migrate()
+    if settings.max_attempts < 1:
+        raise ValueError("max attempts must be positive")
+    config = database.run_config(settings.run_id)
+    source = source_factory(argparse.Namespace(**{**vars(settings), "host": config.get("host", settings.host), "locale": config.get("locale", settings.locale)}))
+    return Collector(database, transport=source).retry_unresolved(
+        settings.run_id, search_page=source.search_page, detail=source.detail, max_attempts=settings.max_attempts,
+    )
+
+
+def run_coverage(settings: argparse.Namespace) -> list[dict[str, Any]]:
+    database = database_for(settings)
+    database.migrate()
+    database.run_config(settings.run_id)
+    return database.coverage_report(settings.run_id)
+
+
 def run_export_labeling(settings: argparse.Namespace) -> int:
     """Write all auto-labeled snapshots as reviewable CSV."""
     database = database_for(settings)
@@ -619,6 +650,10 @@ def main(argv: list[str] | None = None) -> None:
         elif settings.command == "resume":
             counters = run_resume(settings)
             print(json.dumps({"run_id": settings.run_id, **counters}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "retry":
+            print(json.dumps({"run_id": settings.run_id, **run_retry(settings)}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "coverage":
+            print(json.dumps(run_coverage(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "export":
             if settings.export_command == "labeling":
                 rows = run_export_labeling(settings)

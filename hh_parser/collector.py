@@ -251,11 +251,48 @@ class Collector:
             overlap_days=overlap_days,
         )
 
+    def retry_unresolved(self, run_id: int, *, search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
+        detail: Callable[[dict[str, Any]], dict[str, Any]], max_attempts: int) -> dict[str, int]:
+        """Retry only unresolved search/card units, preserving every error attempt."""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+        self.database.prepare_run_resume(run_id)
+        self.loaded_ids = self.database.observed_vacancy_ids(run_id)
+        config = self.database.run_config(run_id)
+        for error in self.database.unresolved_errors(run_id, max_attempts=max_attempts):
+            attempt = int(error["attempt"]) + 1
+            if error["stage"] == "search":
+                try:
+                    search_fields = ()
+                    self._collect_search_unit(run_id, int(error["query_id"]), str(error["expression"]), int(error["area_id"]),
+                        search_page, detail, max_pages=config.get("max_pages", 20), date_from=error["date_from"] or None,
+                        date_to=error["date_to"] or None, search_fields=search_fields, error_attempt=attempt)
+                except Exception as exc:
+                    self.database.record_error(run_id, "search", type(exc).__name__, str(exc), query_id=error["query_id"],
+                        area_id=error["area_id"], date_from=error["date_from"], date_to=error["date_to"],
+                        http_status=self._http_status(exc), attempt=attempt, source=self._source_name())
+            else:
+                vacancy_id = str(error["vacancy_hh_id"])
+                try:
+                    payload = detail({"id": vacancy_id, "_source": self._source_name()})
+                    self._store_snapshot(run_id, vacancy_id, self._normalize_snapshot(run_id, payload))
+                    self.loaded_ids.add(vacancy_id)
+                    self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
+                except Exception as exc:
+                    self.database.record_error(run_id, "vacancy", type(exc).__name__, str(exc), query_id=error["query_id"],
+                        area_id=error["area_id"], vacancy_hh_id=vacancy_id, http_status=self._http_status(exc),
+                        attempt=attempt, source=self._source_name())
+        return self._finish(run_id)
+
+    def _source_name(self) -> str:
+        return str(getattr(self.transport, "source_name", "api"))
+
     def _collect_search_unit(
         self, run_id: int, query_id: int, expression: str, area_id: int,
         search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
         detail: Callable[[dict[str, Any]], dict[str, Any]], *, max_pages: int,
         date_from: str | None, date_to: str | None, search_fields: tuple[str, ...] = (),
+        error_attempt: int = 1,
     ) -> bool:
         """Collect one query×area×window. Return True only for API-depth saturation."""
         for page in range(max_pages):
@@ -294,6 +331,7 @@ class Collector:
                         date_from=date_from, date_to=date_to, http_status=200,
                         result_count=len(candidates), is_last_page=is_last,
                         request_url=self._search_request_url(), request_params=request_params,
+                        source=self._source_name(),
                     )
                     self.database.resolve_errors(
                         run_id, "search", query_id=query_id, area_id=area_id,
@@ -309,14 +347,16 @@ class Collector:
                         request_params=self._search_request_params(
                             expression, area_id, page, date_from, date_to, search_fields,
                         ),
+                        source=self._source_name(),
                     )
                     self.database.record_error(
                         run_id, "search", type(error).__name__, str(error),
                         query_id=query_id, area_id=area_id,
                         date_from=date_from, date_to=date_to, http_status=http_status,
+                        source=self._source_name(), attempt=error_attempt,
                     )
                     return False
-            self._load_candidates(run_id, candidates, detail, query_id, area_id)
+            self._load_candidates(run_id, candidates, detail, query_id, area_id, error_attempt=error_attempt)
             if is_last:
                 self.database.resolve_errors(
                     run_id, "coverage", query_id=query_id, area_id=area_id,
@@ -350,7 +390,7 @@ class Collector:
 
     def _load_candidates(
         self, run_id: int, candidates: Iterable[dict[str, Any]],
-        detail: Callable[[dict[str, Any]], dict[str, Any]], query_id: int, area_id: int,
+        detail: Callable[[dict[str, Any]], dict[str, Any]], query_id: int, area_id: int, *, error_attempt: int = 1,
     ) -> None:
         """Load each unseen card; failed cards remain eligible for resume."""
         for candidate in candidates:
@@ -367,7 +407,7 @@ class Collector:
                 self.database.record_error(
                     run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                     area_id=area_id, vacancy_hh_id=vacancy_id,
-                    http_status=self._http_status(error),
+                    http_status=self._http_status(error), source=self._source_name(), attempt=error_attempt,
                 )
 
     def _store_snapshot(self, run_id: int, vacancy_id: str, snapshot: dict[str, Any]) -> None:

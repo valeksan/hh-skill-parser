@@ -26,7 +26,7 @@ from hh_parser.export import export_query_hits, export_roles, export_skills, exp
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
-    apply_defaults, build_parser as build_research_parser, run_collect, run_resume, resolve_collection_window,
+    apply_defaults, build_parser as build_research_parser, run_collect, run_coverage, run_resume, run_retry, resolve_collection_window,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
     run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats,
 )
@@ -324,7 +324,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql"],
         )
         self.assertTrue(
             {
@@ -1174,6 +1174,46 @@ class DatabaseTests(unittest.TestCase):
                 "SELECT http_status FROM collection_errors WHERE run_id = ?", (run_id,)
             ).fetchone()
         self.assertEqual((page["http_status"], recorded["http_status"]), (429, 429))
+
+    def test_coverage_report_and_retry_only_unresolved_card(self):
+        parser = build_research_parser()
+        run_id = Collector(self.database).start({"fixture": "coverage"}, ["1"])
+        calls = []
+
+        def search_page(_query, _area, *, page, **_kwargs):
+            calls.append(("search", page))
+            return [{"id": "123", "name": "Специалист", "_source": "api"}], True
+
+        def broken_detail(_candidate):
+            calls.append(("detail", "broken"))
+            raise requests.Timeout("temporary")
+
+        Collector(self.database).collect_paginated(
+            run_id, ["1"], ["воинский учет"], search_page=search_page, detail=broken_detail,
+        )
+        coverage = run_coverage(parser.parse_args([
+            "coverage", "--database", str(self.database.path), "--run-id", str(run_id),
+        ]))
+        self.assertEqual(len(coverage), 1)
+        self.assertEqual(
+            {key: coverage[0][key] for key in ("requested", "completed", "saturated", "failed", "cards_requested", "cards_loaded", "cards_missing", "card_failures")},
+            {"requested": 1, "completed": 1, "saturated": 0, "failed": 0, "cards_requested": 1, "cards_loaded": 0, "cards_missing": 1, "card_failures": 1},
+        )
+
+        class Source:
+            source_name = "api"
+            search_page = staticmethod(lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("search must not retry")))
+
+            @staticmethod
+            def detail(candidate):
+                calls.append(("detail", candidate["id"]))
+                return {"id": candidate["id"], "name": "Специалист"}
+
+        counters = run_retry(parser.parse_args([
+            "retry", "--database", str(self.database.path), "--run-id", str(run_id), "--max-attempts", "2",
+        ]), source_factory=lambda _: Source())
+        self.assertEqual(counters["errors"], 0)
+        self.assertEqual(calls, [("search", 0), ("detail", "broken"), ("detail", "123")])
 
     def test_date_window_is_persisted_and_reused_by_resume(self):
         collector = Collector(self.database)

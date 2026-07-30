@@ -249,22 +249,23 @@ class Database:
         request_url: str | None = None, request_params: dict[str, Any] | None = None,
         http_status: int | None = None, result_count: int | None = None,
         is_last_page: bool = False, error_type: str | None = None,
-        error_message: str | None = None, connection: sqlite3.Connection | None = None,
+        error_message: str | None = None, source: str = "api",
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         """Idempotently record one retrieved or failed search-result page."""
         values = (run_id, query_id, area_id if area_id is not None else -1,
                   date_from or "", date_to or "", page, request_url,
                   json_value(request_params or {}), utc_now(), http_status, result_count,
-                  int(is_last_page), error_type, error_message)
+                  int(is_last_page), error_type, error_message, source)
         sql = (
             "INSERT INTO search_pages(run_id, query_id, area_id, date_from, date_to, page, request_url, "
-            "request_params_json, requested_at, http_status, result_count, is_last_page, error_type, error_message) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "request_params_json, requested_at, http_status, result_count, is_last_page, error_type, error_message, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(run_id, query_id, area_id, date_from, date_to, page) DO UPDATE SET "
             "requested_at=excluded.requested_at, request_url=excluded.request_url, "
             "request_params_json=excluded.request_params_json, http_status=excluded.http_status, "
             "result_count=excluded.result_count, is_last_page=excluded.is_last_page, "
-            "error_type=excluded.error_type, error_message=excluded.error_message"
+            "error_type=excluded.error_type, error_message=excluded.error_message, source=excluded.source"
         )
         self._execute(sql, values, connection)
 
@@ -634,18 +635,87 @@ class Database:
         query_id: int | None = None, area_id: int | None = None,
         vacancy_hh_id: str | int | None = None, http_status: int | None = None,
         attempt: int = 1, date_from: str | None = None, date_to: str | None = None,
+        source: str | None = None, reason_code: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
         """Append auditable collection error."""
+        reason_code = reason_code or self.error_reason(error_type, http_status)
         values = (run_id, stage, query_id, area_id,
                   str(vacancy_hh_id) if vacancy_hh_id is not None else None,
-                  error_type, http_status, message, attempt, utc_now(), date_from, date_to)
+                  error_type, http_status, message, attempt, utc_now(), date_from, date_to, source, reason_code)
         self._execute(
             "INSERT INTO collection_errors(run_id, stage, query_id, area_id, vacancy_hh_id, error_type, "
-            "http_status, message, attempt, occurred_at, date_from, date_to) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "http_status, message, attempt, occurred_at, date_from, date_to, source, reason_code) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             values, connection,
         )
+
+    @staticmethod
+    def error_reason(error_type: str, http_status: int | None) -> str:
+        """Return stable, non-secret failure class for coverage and retry."""
+        if http_status == 429:
+            return "rate_limited"
+        if http_status in {401, 403}:
+            return "authorization"
+        if http_status is not None and 500 <= http_status <= 599:
+            return "server_error"
+        if http_status is not None and 400 <= http_status <= 499:
+            return "client_error"
+        if "Timeout" in error_type:
+            return "timeout"
+        if "Connection" in error_type:
+            return "connection"
+        return "transport_or_parse"
+
+    def unresolved_errors(self, run_id: int, *, max_attempts: int) -> list[dict[str, Any]]:
+        """Load retryable work only; completed work never appears here."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT e.*, q.expression, q.version, q.query_group, q.purpose FROM collection_errors e "
+                "LEFT JOIN search_queries q ON q.id = e.query_id "
+                "WHERE e.run_id = ? AND e.resolved_at IS NULL AND e.stage IN ('search', 'vacancy') "
+                "AND e.attempt < ? AND e.id IN (SELECT MAX(id) FROM collection_errors "
+                "WHERE run_id = ? AND resolved_at IS NULL AND stage IN ('search', 'vacancy') "
+                "GROUP BY stage, query_id, area_id, vacancy_hh_id, date_from, date_to) ORDER BY e.id",
+                (run_id, max_attempts, run_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def coverage_report(self, run_id: int) -> list[dict[str, Any]]:
+        """Build coverage solely from persisted pages, hits, snapshots and errors."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "WITH units AS ("
+                " SELECT run_id, query_id, area_id, date_from, date_to FROM search_pages WHERE run_id = ?"
+                " UNION SELECT run_id, query_id, area_id, COALESCE(date_from,''), COALESCE(date_to,'')"
+                " FROM collection_errors WHERE run_id = ? AND query_id IS NOT NULL AND area_id IS NOT NULL"
+                "), cards AS ("
+                " SELECT h.run_id,h.query_id,h.area_id,h.date_from,h.date_to,"
+                " COUNT(DISTINCT h.vacancy_hh_id) AS cards_requested,"
+                " COUNT(DISTINCT o.vacancy_hh_id) AS cards_loaded"
+                " FROM vacancy_query_hits h LEFT JOIN vacancy_snapshot_observations o"
+                " ON o.run_id=h.run_id AND o.vacancy_hh_id=h.vacancy_hh_id"
+                " WHERE h.run_id=? GROUP BY h.run_id,h.query_id,h.area_id,h.date_from,h.date_to"
+                ") SELECT q.query_group, q.expression, u.area_id, NULLIF(u.date_from,'') AS date_from,"
+                " NULLIF(u.date_to,'') AS date_to, 1 AS requested,"
+                " MAX(CASE WHEN p.http_status BETWEEN 200 AND 299 AND p.error_type IS NULL THEN 1 ELSE 0 END) AS completed,"
+                " MAX(CASE WHEN e.stage='coverage' AND e.error_type='SearchDepthSaturated' AND e.resolved_at IS NULL THEN 1 ELSE 0 END) AS saturated,"
+                " MAX(CASE WHEN e.stage='search' AND e.resolved_at IS NULL THEN 1 ELSE 0 END) AS failed,"
+                " COALESCE(c.cards_requested,0) AS cards_requested, COALESCE(c.cards_loaded,0) AS cards_loaded,"
+                " COALESCE(c.cards_requested,0)-COALESCE(c.cards_loaded,0) AS cards_missing,"
+                " SUM(CASE WHEN e.stage='vacancy' AND e.resolved_at IS NULL THEN 1 ELSE 0 END) AS card_failures"
+                " FROM units u JOIN search_queries q ON q.id=u.query_id"
+                " LEFT JOIN search_pages p ON p.run_id=u.run_id AND p.query_id=u.query_id AND p.area_id=u.area_id"
+                " AND p.date_from=u.date_from AND p.date_to=u.date_to"
+                " LEFT JOIN collection_errors e ON e.run_id=u.run_id AND e.query_id=u.query_id AND e.area_id=u.area_id"
+                " AND COALESCE(e.date_from,'')=u.date_from AND COALESCE(e.date_to,'')=u.date_to"
+                " LEFT JOIN cards c ON c.run_id=u.run_id AND c.query_id=u.query_id AND c.area_id=u.area_id"
+                " AND c.date_from=u.date_from AND c.date_to=u.date_to"
+                " GROUP BY q.query_group,q.expression,u.area_id,u.date_from,u.date_to,c.cards_requested,c.cards_loaded"
+                " ORDER BY q.query_group,q.expression,u.area_id,u.date_from,u.date_to",
+                (run_id, run_id, run_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def resolve_errors(
         self, run_id: int, stage: str, *, query_id: int | None = None,

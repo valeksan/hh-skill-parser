@@ -22,11 +22,12 @@ from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features, repost_fingerprint
 from hh_parser.export import export_vacancies
+from hh_parser.discovery import discover_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_db, run_import_labeling, run_extract, run_export_vacancies, run_maintenance, run_stats,
+    run_db, run_discover, run_import_labeling, run_extract, run_export_vacancies, run_maintenance, run_stats,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -487,6 +488,33 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.database.run_counters(self.database.start_run({"fixture": "fresh"})), {
             "found": 0, "unique": 0, "loaded": 0, "errors": 0,
         })
+
+    def test_skill_discovery_is_local_deterministic_and_excludes_known_aliases(self):
+        run_id = self.database.start_run({"fixture": "discovery"})
+        for vacancy_id in ("discover-1", "discover-2"):
+            self.database.upsert_vacancy(vacancy_id, source="api")
+            self.database.record_snapshot(run_id, vacancy_id, {
+                "content_hash": f"hash-{vacancy_id}", "title": "Специалист", "source": "api",
+                "description_text": "Новая технология для воинского учета", "key_skills": [{"name": "Новая технология"}],
+            })
+            self.database.upsert_auto_relevance(
+                self.database.snapshot_id(vacancy_id, f"hash-{vacancy_id}"), "relevant", 1.0, [], "test",
+            )
+        skills_file = Path(self.temp_dir.name) / "skills.txt"
+        skills_file.write_text("воинский учет\n", encoding="utf-8")
+        dictionary = load_skill_dictionary(skills_file)
+        first = discover_skill_candidates(self.database, dictionary, min_document_frequency=2)
+        second = discover_skill_candidates(self.database, dictionary, min_document_frequency=2)
+        self.assertEqual(first, second)
+        candidates = {row["candidate"]: row for row in first}
+        self.assertIn("новая технология", candidates)
+        self.assertNotIn("воинский учет", candidates)
+        output = Path(self.temp_dir.name) / "candidates.csv"
+        settings = build_research_parser().parse_args([
+            "discover", "--database", str(self.database.path), "skills", "--output", str(output),
+            "--skills-file", str(skills_file), "--min-document-frequency", "2",
+        ])
+        self.assertGreater(run_discover(settings), 0)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

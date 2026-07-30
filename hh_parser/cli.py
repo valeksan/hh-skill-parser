@@ -17,6 +17,7 @@ from .areas import (
     validate_area_ids,
 )
 from .collector import Collector
+from .discovery import discover_skill_candidates, export_skill_candidates
 from .extractors.offline import extract as run_extraction
 from .export import export_vacancies
 from .config import cli_defaults, load_config
@@ -160,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
     db_commands.add_parser("migrate", help="apply packaged SQLite migrations")
     reset = db_commands.add_parser("reset", help="preview or clear all collected/derived data")
     reset.add_argument("--yes", action="store_true", help="permanently clear data; default is preview")
+
+    discover = commands.add_parser("discover", help="mine skill candidates from stored corpus")
+    discover.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    discover_commands = discover.add_subparsers(dest="discover_command", required=True)
+    discover_skills = discover_commands.add_parser("skills", help="export unknown skill candidates CSV")
+    discover_skills.add_argument("--output", required=True)
+    discover_skills.add_argument("--skills-file", default="skills_whitelist.txt")
+    discover_skills.add_argument("--min-document-frequency", type=nonnegative_int, default=2)
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
@@ -358,6 +367,14 @@ def run_db(settings: argparse.Namespace) -> dict[str, Any]:
     return {"dry_run": False, "tables": database.reset_data()}
 
 
+def run_discover(settings: argparse.Namespace) -> int:
+    database = Database(settings.database)
+    database.migrate()
+    dictionary = load_skill_dictionary(settings.skills_file)
+    rows = discover_skill_candidates(database, dictionary, min_document_frequency=settings.min_document_frequency)
+    return export_skill_candidates(rows, settings.output)
+
+
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
     database = Database(settings.database)
@@ -463,6 +480,8 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(run_maintenance(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "db":
             print(json.dumps(run_db(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "discover":
+            print(json.dumps({"rows": run_discover(settings)}, ensure_ascii=False, sort_keys=True))
         else:
             print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:

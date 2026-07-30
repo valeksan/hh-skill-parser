@@ -12,6 +12,10 @@ import parse_skills
 import start
 from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
+from hh_parser.areas import (
+    AreaSelectionError, find_overlaps, flatten_area_tree, parse_area_lines,
+    select_catalog_areas, validate_area_ids,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -305,7 +309,10 @@ class DatabaseTests(unittest.TestCase):
                 )
             }
 
-        self.assertEqual([row["version"] for row in migrations], ["0001_initial.sql"])
+        self.assertEqual(
+            [row["version"] for row in migrations],
+            ["0001_initial.sql", "0002_area_catalog.sql"],
+        )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
@@ -378,6 +385,29 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(snapshot["raw_content_type"], "text/html")
         self.assertNotIn("mail@example.com", raw_html)
         self.assertIn("[redacted-email]", raw_html)
+
+
+class AreaTests(unittest.TestCase):
+    def setUp(self):
+        self.catalog = flatten_area_tree([
+            {"id": "113", "name": "Россия", "areas": [
+                {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+                {"id": "13", "name": "ЦФО", "parent_id": "113", "areas": [
+                    {"id": "14", "name": "Тверь", "parent_id": "13", "areas": []},
+                ]},
+            ]},
+        ])
+
+    def test_area_file_ignores_comments_and_rejects_duplicate(self):
+        self.assertEqual(parse_area_lines(["# Russia\n", "1 # Moscow\n", "13\n"]), ["1", "13"])
+        with self.assertRaisesRegex(AreaSelectionError, "duplicate"):
+            parse_area_lines(["1\n", "1\n"])
+
+    def test_catalog_selection_and_overlap_detection(self):
+        self.assertEqual(select_catalog_areas(self.catalog, "113", "leaf"), ["1", "14"])
+        self.assertEqual(find_overlaps(["13", "14"], self.catalog), [("13", "14")])
+        with self.assertRaisesRegex(AreaSelectionError, "unknown"):
+            validate_area_ids(["999"], self.catalog)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,22 @@ def json_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+SENSITIVE_CONFIG_KEY_PARTS = ("token", "secret", "password", "authorization", "api_key", "apikey")
+
+
+def redact_config(value: Any) -> Any:
+    """Copy config with credentials removed before durable storage or hashing."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            name = str(key).casefold().replace("-", "_")
+            result[key] = "[redacted]" if any(part in name for part in SENSITIVE_CONFIG_KEY_PARTS) else redact_config(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [redact_config(item) for item in value]
+    return value
+
+
 class Database:
     """Small transactional repository. Every write is safe to repeat."""
 
@@ -89,7 +105,7 @@ class Database:
         """Create immutable run metadata and return its ID."""
         if collection_mode not in {"incremental", "full"}:
             raise ValueError("collection_mode must be 'incremental' or 'full'")
-        config_json = json_value(config)
+        config_json = json_value(redact_config(config))
         config_hash = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
         values = (
             utc_now(), "running", app_version, git_commit, source_policy,

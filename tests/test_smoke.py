@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import os
 import subprocess
 import sys
@@ -604,6 +605,22 @@ class DatabaseTests(unittest.TestCase):
             page_count = connection.execute("SELECT COUNT(*) FROM search_pages").fetchone()[0]
 
         self.assertEqual((hit_count, snapshot_count, page_count), (1, 1, 1))
+
+    def test_run_config_redacts_credentials_before_json_and_hash(self):
+        run_id = self.database.start_run({
+            "access_token": "secret-token", "nested": {"Authorization": "Bearer secret-token"},
+            "ordinary": "kept",
+        })
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT config_json, config_hash FROM collection_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        self.assertNotIn("secret-token", row["config_json"])
+        self.assertEqual(
+            row["config_json"],
+            '{"access_token":"[redacted]","nested":{"Authorization":"[redacted]"},"ordinary":"kept"}',
+        )
+        self.assertEqual(row["config_hash"], hashlib.sha256(row["config_json"].encode("utf-8")).hexdigest())
 
     def test_transaction_rolls_back_all_writes(self):
         with self.assertRaises(RuntimeError):

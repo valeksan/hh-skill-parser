@@ -12,7 +12,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 
 ALLOWED: dict[str, set[str]] = {
-    "hh": {"access_token", "user_agent", "request_timeout"},
+    "hh": {"access_token", "user_agent", "request_timeout", "max_retries", "retry_backoff"},
     "database": {"path"},
     "collection": {
         "mode", "max_pages", "areas_file", "areas_source", "area_root", "area_level",
@@ -54,6 +54,7 @@ def cli_defaults(config: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "access_token": hh.get("access_token"), "user_agent": hh.get("user_agent"),
         "request_timeout": hh.get("request_timeout"), "database": database.get("path"),
+        "max_retries": hh.get("max_retries"), "retry_backoff": hh.get("retry_backoff"),
         "collection_mode": collection.get("mode"), "max_pages": collection.get("max_pages"),
         "areas_file": collection.get("areas_file"), "areas_source": collection.get("areas_source"),
         "area_root": collection.get("area_root"), "area_level": collection.get("area_level"),
@@ -76,6 +77,12 @@ def validate_config(config: dict[str, Any]) -> None:
     timeout = hh.get("request_timeout")
     if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
         raise ValueError("[hh].request_timeout must be positive")
+    max_retries = hh.get("max_retries")
+    if max_retries is not None and (not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0):
+        raise ValueError("[hh].max_retries must be a non-negative integer")
+    retry_backoff = hh.get("retry_backoff")
+    if retry_backoff is not None and (not isinstance(retry_backoff, (int, float)) or isinstance(retry_backoff, bool) or retry_backoff < 0):
+        raise ValueError("[hh].retry_backoff must be non-negative")
     max_pages = collection.get("max_pages")
     if max_pages is not None and (not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 20):
         raise ValueError("[collection].max_pages must be between 1 and 20")

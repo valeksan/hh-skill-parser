@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from time import sleep
 from typing import Any
 
 import requests
@@ -15,12 +17,21 @@ class HHApiSource:
     def __init__(
         self, *, user_agent: str, timeout: float = 30.0,
         access_token: str | None = None, session: requests.Session | None = None,
+        max_retries: int = 3, retry_backoff: float = 1.0,
+        sleep_fn: Callable[[float], None] = sleep,
     ):
         if not user_agent.strip():
             raise ValueError("HH API user agent must not be empty")
         if timeout <= 0:
             raise ValueError("HH API timeout must be positive")
+        if max_retries < 0:
+            raise ValueError("HH API max_retries must not be negative")
+        if retry_backoff < 0:
+            raise ValueError("HH API retry_backoff must not be negative")
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.sleep_fn = sleep_fn
         self.session = session or requests.Session()
         self.session.headers.update({
             "HH-User-Agent": user_agent,
@@ -37,21 +48,41 @@ class HHApiSource:
         self._auth_degradation = None
         return event
 
-    def _get(self, path: str, **kwargs: Any) -> requests.Response:
-        """Request API; one rejected bearer token degrades to public API."""
-        response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
+    @staticmethod
+    def _retry_after(response: requests.Response, fallback: float) -> float:
+        """Use numeric Retry-After when supplied; malformed/date values use backoff."""
+        value = response.headers.get("Retry-After")
+        if value is None:
+            return fallback
         try:
+            return max(0.0, float(value))
+        except ValueError:
+            return fallback
+
+    def _get(self, path: str, **kwargs: Any) -> requests.Response:
+        """Request API; retry only transient failures, then fail with original status."""
+        auth_retry = True
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt >= self.max_retries:
+                    raise
+                self.sleep_fn(self.retry_backoff * (2 ** attempt))
+                continue
+            status = getattr(response, "status_code", 200)
+            if status in {401, 403} and auth_retry and "Authorization" in self.session.headers:
+                self.session.headers.pop("Authorization", None)
+                self._auth_degradation = self._auth_degradation or {"http_status": int(status)}
+                auth_retry = False
+                continue
+            if status == 429 or 500 <= status <= 599:
+                if attempt < self.max_retries:
+                    self.sleep_fn(self._retry_after(response, self.retry_backoff * (2 ** attempt)))
+                    continue
             response.raise_for_status()
-        except requests.HTTPError:
-            status = getattr(response, "status_code", None)
-            if status not in {401, 403} or "Authorization" not in self.session.headers:
-                raise
-            self.session.headers.pop("Authorization", None)
-            if self._auth_degradation is None:
-                self._auth_degradation = {"http_status": int(status)}
-            response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
-            response.raise_for_status()
-        return response
+            return response
+        raise RuntimeError("unreachable HH API retry state")
 
     def search(self, expression: str, area_id: str, *, per_page: int = 100) -> list[dict[str, Any]]:
         """Fetch first documented search page; caller persists coverage unit."""

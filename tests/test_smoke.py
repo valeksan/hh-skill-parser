@@ -1176,6 +1176,43 @@ class ApiSourceTests(unittest.TestCase):
         self.assertEqual(source.consume_auth_degradation(), {"http_status": 401})
         self.assertIsNone(source.consume_auth_degradation())
 
+    def test_api_source_retries_429_using_retry_after(self):
+        class Response:
+            def __init__(self, status_code, headers=None):
+                self.status_code = status_code
+                self.headers = headers or {}
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    error = requests.HTTPError(f"HTTP {self.status_code}")
+                    error.response = self
+                    raise error
+
+            def json(self):
+                return {"items": [], "pages": 0}
+
+        class Session:
+            def __init__(self):
+                self.headers = {}
+                self.calls = 0
+
+            def get(self, _url, **_kwargs):
+                self.calls += 1
+                return Response(429, {"Retry-After": "2"}) if self.calls == 1 else Response(200)
+
+        pauses = []
+        session = Session()
+        source = HHApiSource(
+            user_agent="test-app/1.0", session=session, max_retries=2,
+            retry_backoff=0.1, sleep_fn=pauses.append,
+        )
+        items, is_last = source.search_page("воинский учет", "1", page=0)
+
+        self.assertEqual(items, [])
+        self.assertTrue(is_last)
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(pauses, [2.0])
+
     def test_collector_marks_run_degraded_after_safe_auth_fallback(self):
         class Transport:
             def consume_auth_degradation(self):

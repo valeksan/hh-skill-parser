@@ -4,6 +4,8 @@
 # access_token = ""
 # user_agent = "hh-skill-parser/1.0 (contact@example.invalid)"
 # request_timeout = 30.0
+# max_retries = 3
+# retry_backoff = 1.0
 
 [database]
 # path = "hh_mobilization.sqlite3"

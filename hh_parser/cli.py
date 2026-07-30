@@ -70,6 +70,8 @@ def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
     parser.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
     parser.add_argument("--request-timeout", type=float, default=30.0)
+    parser.add_argument("--max-retries", type=nonnegative_int, default=3)
+    parser.add_argument("--retry-backoff", type=float, default=1.0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -251,6 +253,8 @@ def make_source(settings: argparse.Namespace) -> HHApiSource:
     return HHApiSource(
         user_agent=settings.user_agent, timeout=settings.request_timeout,
         access_token=getattr(settings, "access_token", None) or None,
+        max_retries=getattr(settings, "max_retries", 3),
+        retry_backoff=getattr(settings, "retry_backoff", 1.0),
     )
 
 
@@ -270,6 +274,7 @@ def run_collect(
         "queries_file": str(settings.queries_file), "area_ids": area_ids,
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
+        "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
         "date_from": settings.date_from, "date_to": settings.date_to,
         "date_slice_min_days": settings.date_slice_min_days,

@@ -110,3 +110,31 @@ def find_overlaps(area_ids: Iterable[str], catalog: dict[str, Area]) -> list[tup
                 overlaps.append((parent_id, area_id))
             parent_id = catalog[parent_id].parent_id if parent_id in catalog else None
     return sorted(overlaps, key=lambda pair: (int(pair[0]), int(pair[1])))
+
+
+def resolve_russia_geography(area_id: str | int | None, catalog: dict[str, Area]) -> dict[str, str | None]:
+    """Map catalog ancestry to DA geography without street-level source fields.
+
+    HH `/areas` encodes Russia as 113 -> federal district -> subject -> locality.
+    Unknown/non-Russian/incomplete chains remain NULL rather than inferred by names.
+    """
+    if area_id is None:
+        return {"federal_district": None, "federal_subject": None, "locality": None}
+    current = catalog.get(str(area_id))
+    if current is None:
+        return {"federal_district": None, "federal_subject": None, "locality": None}
+    chain = [current]
+    while chain[-1].parent_id:
+        parent = catalog.get(chain[-1].parent_id)
+        if parent is None:
+            return {"federal_district": None, "federal_subject": None, "locality": None}
+        chain.append(parent)
+    chain.reverse()
+    if not chain or chain[0].hh_id != "113":
+        return {"federal_district": None, "federal_subject": None, "locality": None}
+    hierarchy = chain[1:]
+    return {
+        "federal_district": hierarchy[0].name if len(hierarchy) >= 1 else None,
+        "federal_subject": hierarchy[1].name if len(hierarchy) >= 2 else None,
+        "locality": hierarchy[-1].name if len(hierarchy) >= 3 else None,
+    }

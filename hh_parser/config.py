@@ -13,7 +13,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 ALLOWED: dict[str, set[str]] = {
     "hh": {"access_token", "user_agent", "request_timeout", "max_retries", "retry_backoff", "host", "locale"},
-    "database": {"path"},
+    "database": {"path", "wal", "busy_timeout_ms"},
     "collection": {
         "mode", "max_pages", "areas_file", "areas_source", "area_root", "area_level",
         "date_from", "date_to", "date_slice_min_days", "date_overlap_days",
@@ -55,6 +55,7 @@ def cli_defaults(config: dict[str, Any]) -> dict[str, Any]:
         "access_token": hh.get("access_token"), "user_agent": hh.get("user_agent"),
         "host": hh.get("host"), "locale": hh.get("locale"),
         "request_timeout": hh.get("request_timeout"), "database": database.get("path"),
+        "wal": database.get("wal"), "busy_timeout_ms": database.get("busy_timeout_ms"),
         "max_retries": hh.get("max_retries"), "retry_backoff": hh.get("retry_backoff"),
         "collection_mode": collection.get("mode"), "max_pages": collection.get("max_pages"),
         "areas_file": collection.get("areas_file"), "areas_source": collection.get("areas_source"),
@@ -70,6 +71,7 @@ def cli_defaults(config: dict[str, Any]) -> dict[str, Any]:
 def validate_config(config: dict[str, Any]) -> None:
     """Reject bad scalar types/ranges before database or network activity."""
     hh = config.get("hh", {})
+    database = config.get("database", {})
     collection = config.get("collection", {})
     for section, key in (
         ("hh", "access_token"), ("hh", "user_agent"), ("hh", "host"),
@@ -78,6 +80,14 @@ def validate_config(config: dict[str, Any]) -> None:
         value = config.get(section, {}).get(key)
         if value is not None and not isinstance(value, str):
             raise ValueError(f"[{section}].{key} must be a string")
+    wal = database.get("wal")
+    if wal is not None and not isinstance(wal, bool):
+        raise ValueError("[database].wal must be a boolean")
+    busy_timeout = database.get("busy_timeout_ms")
+    if busy_timeout is not None and (
+        not isinstance(busy_timeout, int) or isinstance(busy_timeout, bool) or busy_timeout < 0
+    ):
+        raise ValueError("[database].busy_timeout_ms must be a non-negative integer")
     timeout = hh.get("request_timeout")
     if timeout is not None and (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0):
         raise ValueError("[hh].request_timeout must be positive")

@@ -11,6 +11,8 @@
 
 [database]
 # path = "hh_mobilization.sqlite3"
+# wal = true
+# busy_timeout_ms = 5000
 
 [collection]
 # mode = "incremental"

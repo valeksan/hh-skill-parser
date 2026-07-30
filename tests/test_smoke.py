@@ -17,7 +17,7 @@ from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
 from hh_parser.areas import (
     AreaSelectionError, find_overlaps, flatten_area_tree, parse_area_lines,
-    select_catalog_areas, validate_area_ids,
+    resolve_russia_geography, select_catalog_areas, validate_area_ids,
 )
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
@@ -335,6 +335,38 @@ class DatabaseTests(unittest.TestCase):
                 "skills", "skill_aliases", "vacancy_skills",
                 "extraction_runs", "extraction_errors",
             }.issubset(tables)
+        )
+
+    def test_collector_derives_geography_from_frozen_area_catalog(self):
+        catalog_id = self.database.store_area_catalog([{
+            "id": "113", "name": "Россия", "areas": [{
+                "id": "10", "name": "Сибирский федеральный округ", "areas": [{
+                    "id": "20", "name": "Новосибирская область", "areas": [{
+                        "id": "30", "name": "Новосибирск", "areas": [],
+                    }],
+                }],
+            }],
+        }], source_url="fixture")
+        collector = Collector(self.database)
+        run_id = collector.start(
+            {"catalog_version_id": catalog_id}, ["30"], catalog_version_id=catalog_id,
+        )
+        collector.collect(
+            run_id, ["30"], ["воинский учет"],
+            search=lambda *_: [{"id": "geo-1", "name": "Специалист", "_source": "api"}],
+            detail=lambda _: {"id": "geo-1", "name": "Специалист", "area": {"id": "30", "name": "Новосибирск"}},
+        )
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT federal_district, federal_subject, locality FROM vacancy_snapshots"
+            ).fetchone()
+        self.assertEqual(tuple(row), ("Сибирский федеральный округ", "Новосибирская область", "Новосибирск"))
+
+    def test_geography_does_not_infer_unknown_catalog_paths(self):
+        catalog = flatten_area_tree([{"id": "1", "name": "Other", "areas": []}])
+        self.assertEqual(
+            resolve_russia_geography("1", catalog),
+            {"federal_district": None, "federal_subject": None, "locality": None},
         )
 
     def test_da_views_use_latest_snapshot_and_effective_relevance(self):
@@ -1498,6 +1530,26 @@ class ConfigTests(unittest.TestCase):
             path.write_text("[collection]\nunknown = 1\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unknown config key"):
                 load_config(path)
+
+    def test_database_toml_defaults_allow_cli_override_and_validate_types(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(
+                "[database]\npath = 'from-toml.sqlite3'\nwal = false\nbusy_timeout_ms = 9000\n",
+                encoding="utf-8",
+            )
+            parser = build_research_parser()
+            apply_defaults(parser, cli_defaults(load_config(path)))
+            parsed = parser.parse_args(["db", "--no-wal", "--busy-timeout-ms", "1", "check"])
+        self.assertEqual(parsed.database, "from-toml.sqlite3")
+        self.assertFalse(parsed.wal)
+        self.assertEqual(parsed.busy_timeout_ms, 1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "bad.toml"
+            path.write_text("[database]\nwal = 'no'\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"\[database\]\.wal must be a boolean"):
+                cli_defaults(load_config(path))
 
     def test_versioned_query_specs_keep_hh_expression_unquoted(self):
         with tempfile.TemporaryDirectory() as temp_dir:

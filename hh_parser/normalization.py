@@ -115,7 +115,8 @@ def normalize_iso_timestamp(value: Any) -> tuple[str | None, str | None]:
 
 
 def _snapshot(
-    data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None
+    data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None,
+    geography: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     redacted_payload, redaction_types = redact_payload(raw_payload)
     description_html, html_types = sanitize_text(data.get("description", ""))
@@ -124,6 +125,7 @@ def _snapshot(
 
     employer = data.get("employer") or {}
     area = data.get("area") or {}
+    geography = geography or {}
     salary = data.get("salary_range") or data.get("salary") or {}
     frequency = salary.get("frequency") or salary.get("mode") or {}
     if isinstance(frequency, dict):
@@ -146,6 +148,7 @@ def _snapshot(
         "published_at": published_at, "created_at": created_at,
         "expires_at": expires_at, "archived": data.get("archived"),
         "employer_id": employer.get("id"), "employer_name": employer.get("name"),
+        "geography": geography,
         "raw": redacted_payload,
     }
     content_hash = hashlib.sha256(json_value(fingerprint).encode("utf-8")).hexdigest()
@@ -159,7 +162,9 @@ def _snapshot(
         "expires_at_source_offset": expires_offset,
         "archived": data.get("archived"), "employer_id": employer.get("id"),
         "employer_name": employer.get("name"), "area_id": area.get("id"),
-        "area_name": area.get("name"), "salary_from": salary.get("from"),
+        "area_name": area.get("name"), "federal_district": geography.get("federal_district"),
+        "federal_subject": geography.get("federal_subject"), "locality": geography.get("locality"),
+        "salary_from": salary.get("from"),
         "salary_to": salary.get("to"), "salary_currency": salary.get("currency"),
         "salary_gross": salary.get("gross"), "salary_frequency": frequency, "source": source,
         "employer_type": employer.get("type"), "employer_trusted": employer.get("trusted"),
@@ -197,9 +202,12 @@ def _snapshot(
     }
 
 
-def normalize_api_vacancy(data: dict[str, Any], *, observed_at: str | None = None) -> dict[str, Any]:
+def normalize_api_vacancy(
+    data: dict[str, Any], *, observed_at: str | None = None,
+    geography: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
     """Normalize one API detail response into storage snapshot fields."""
-    return _snapshot(data, source="api", raw_payload=data, observed_at=observed_at)
+    return _snapshot(data, source="api", raw_payload=data, observed_at=observed_at, geography=geography)
 
 
 def normalize_html_vacancy(

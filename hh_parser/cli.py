@@ -113,6 +113,22 @@ def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--retry-backoff", type=float, default=1.0)
 
 
+def add_database_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add portable SQLite connection settings shared by DB-backed commands."""
+    parser.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    parser.add_argument("--busy-timeout-ms", type=nonnegative_int, default=5_000)
+    parser.add_argument("--no-wal", dest="wal", action="store_false", default=True)
+
+
+def database_for(settings: argparse.Namespace) -> Database:
+    """Open SQLite using CLI/config settings; legacy direct callers keep defaults."""
+    return Database(
+        settings.database,
+        busy_timeout_ms=getattr(settings, "busy_timeout_ms", 5_000),
+        wal=getattr(settings, "wal", True),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build command parser without importing legacy CLI options."""
     parser = argparse.ArgumentParser(prog="hh-skill-parser")
@@ -120,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect = commands.add_parser("collect", help="collect HH vacancies into SQLite")
     collect.add_argument("--config")
-    collect.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(collect)
     collect.add_argument("--queries-file", default="query_specs.toml")
     collect.add_argument("--area", action="append", default=[])
     collect.add_argument("--areas-file")
@@ -139,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume = commands.add_parser("resume", help="resume one degraded/interrupted SQLite run")
     resume.add_argument("--config")
-    resume.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(resume)
     resume.add_argument("--run-id", required=True, type=int)
     resume.add_argument("--queries-file", default="query_specs.toml")
     resume.add_argument("--max-pages", type=int, default=20)
@@ -147,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     extract = commands.add_parser("extract", help="derive offline data from stored snapshots")
     extract.add_argument("--config")
-    extract.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(extract)
     extract.add_argument("--run-id", action="append", type=int, default=[])
     extract.add_argument("--area", action="append", default=[])
     extract.add_argument("--source")
@@ -161,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     export = commands.add_parser("export", help="export SQLite data")
     export.add_argument("--config")
-    export.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(export)
     export_commands = export.add_subparsers(dest="export_command", required=True)
     labeling_export = export_commands.add_parser("labeling", help="export relevance-labeling CSV")
     labeling_export.add_argument("--output", required=True)
@@ -185,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     stats = commands.add_parser("stats", help="calculate DB-only vacancy statistics")
     stats.add_argument("--config")
-    stats.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(stats)
     stats.add_argument("--snapshot", choices=["latest", "all"], default="latest")
     stats.add_argument("--run-id", action="append", type=int, default=[])
     stats.add_argument("--area", action="append", default=[])
@@ -195,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--date-to", type=parse_iso_date)
 
     maintenance = commands.add_parser("maintenance", help="explicit database maintenance")
-    maintenance.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(maintenance)
     maintenance_commands = maintenance.add_subparsers(dest="maintenance_command", required=True)
     purge_raw = maintenance_commands.add_parser("purge-raw", help="preview or purge old raw payload BLOBs only")
     purge_raw.add_argument("--before", required=True, type=parse_iso_date)
@@ -203,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     purge_raw.add_argument("--confirm", help="required exact value: PURGE_RAW_PAYLOADS")
 
     db = commands.add_parser("db", help="database lifecycle commands")
-    db.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(db)
     db_commands = db.add_subparsers(dest="db_command", required=True)
     db_commands.add_parser("migrate", help="apply packaged SQLite migrations")
     db_commands.add_parser("check", help="run SQLite integrity check")
@@ -212,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--yes", action="store_true", help="permanently clear data; default is preview")
 
     discover = commands.add_parser("discover", help="mine skill candidates from stored corpus")
-    discover.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(discover)
     discover_commands = discover.add_subparsers(dest="discover_command", required=True)
     discover_skills = discover_commands.add_parser("skills", help="export unknown skill candidates CSV")
     discover_skills.add_argument("--output", required=True)
@@ -221,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
-    labeling_import.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(labeling_import)
     import_commands = labeling_import.add_subparsers(dest="import_command", required=True)
     labeling_import_csv = import_commands.add_parser("labeling", help="import reviewed relevance-labeling CSV")
     labeling_import_csv.add_argument("path")
@@ -231,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     candidates_import.add_argument("--output", required=True)
 
     areas = commands.add_parser("areas", help="manage versioned HH area catalog")
-    areas.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    add_database_arguments(areas)
     areas_commands = areas.add_subparsers(dest="areas_command", required=True)
     areas_sync = areas_commands.add_parser("sync", help="fetch and store official HH /areas catalog")
     areas_sync.add_argument("--root", default="113")
@@ -301,7 +317,7 @@ def run_collect(
     settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source,
 ) -> tuple[int, dict[str, int]]:
     """Start finite DB-backed collection and return run ID with durable counters."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     validate_date_range(settings.date_from, settings.date_to)
     if settings.date_slice_min_days < 1 or settings.date_overlap_days < 0:
@@ -314,6 +330,7 @@ def run_collect(
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
         "host": settings.host, "locale": settings.locale,
+        "database_wal": settings.wal, "database_busy_timeout_ms": settings.busy_timeout_ms,
         "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
         "date_from": settings.date_from, "date_to": settings.date_to,
@@ -345,7 +362,7 @@ def run_resume(
     settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source,
 ) -> dict[str, int]:
     """Resume DB work without rediscovering areas or losing previous pages/cards."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     config = database.run_config(settings.run_id)
     source_options = {
@@ -372,7 +389,7 @@ def run_resume(
 
 def run_export_labeling(settings: argparse.Namespace) -> int:
     """Write all auto-labeled snapshots as reviewable CSV."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return export_labeling(
         database, settings.output, sample_size=settings.sample_size, sample_seed=settings.sample_seed,
@@ -382,7 +399,7 @@ def run_export_labeling(settings: argparse.Namespace) -> int:
 def run_export_vacancies(settings: argparse.Namespace) -> int:
     """Write filtered vacancy CSV without invoking HH or an extractor."""
     validate_date_range(settings.date_from, settings.date_to)
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return export_vacancies(
         database, settings.output, snapshot_scope=settings.snapshot,
@@ -393,13 +410,13 @@ def run_export_vacancies(settings: argparse.Namespace) -> int:
 
 
 def run_export_skills(settings: argparse.Namespace) -> int:
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return export_skills(database, settings.output)
 
 
 def run_export_relation(settings: argparse.Namespace) -> int:
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return export_roles(database, settings.output) if settings.export_command == "roles" else export_query_hits(database, settings.output)
 
@@ -407,7 +424,7 @@ def run_export_relation(settings: argparse.Namespace) -> int:
 def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
     """Calculate filtered counts from SQLite only."""
     validate_date_range(settings.date_from, settings.date_to)
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return vacancy_stats(
         database, snapshot_scope=settings.snapshot, run_ids=settings.run_id or None,
@@ -418,7 +435,7 @@ def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
 
 def run_maintenance(settings: argparse.Namespace) -> dict[str, Any]:
     """Run explicit, narrowly scoped maintenance action."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     if settings.maintenance_command != "purge-raw":
         raise ValueError(f"unsupported maintenance command: {settings.maintenance_command}")
@@ -431,7 +448,7 @@ def run_maintenance(settings: argparse.Namespace) -> dict[str, Any]:
 
 def run_db(settings: argparse.Namespace) -> dict[str, Any]:
     """Run schema migration or explicit full data reset."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     if settings.db_command == "migrate":
         return {"migrated": True}
@@ -447,7 +464,7 @@ def run_db(settings: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_discover(settings: argparse.Namespace) -> int:
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     dictionary = load_skill_dictionary(settings.skills_file)
     rows = discover_skill_candidates(database, dictionary, min_document_frequency=settings.min_document_frequency)
@@ -460,7 +477,7 @@ def run_import_skill_candidates(settings: argparse.Namespace) -> int:
 
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     return import_labeling(database, settings.path)
 
@@ -468,7 +485,7 @@ def run_import_labeling(settings: argparse.Namespace) -> int:
 def run_extract(settings: argparse.Namespace) -> dict[str, int]:
     """Run selected deterministic extractor with no HH transport or collection state."""
     validate_date_range(settings.date_from, settings.date_to)
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     dictionary = load_skill_dictionary(settings.skills_file) if settings.extract_command == "skills" else None
     return run_extraction(
@@ -482,7 +499,7 @@ def run_areas_sync(
     settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source,
 ) -> int:
     """Fetch and version official HH geographic tree."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     source = source_factory(settings)
     catalog_id = database.store_area_catalog(
@@ -496,7 +513,7 @@ def run_areas_sync(
 
 def run_areas_list(settings: argparse.Namespace) -> list[dict[str, str]]:
     """Return deterministic area list for one frozen catalog version."""
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     catalog_id, catalog = database.load_area_catalog(settings.catalog_version)
     selected = select_catalog_areas(catalog, settings.root, settings.level)
@@ -513,7 +530,7 @@ def run_areas_validate(settings: argparse.Namespace) -> list[str]:
     values = list(settings.area) if settings.area else load_area_file(settings.areas_file) if settings.areas_file else []
     if not values:
         raise AreaSelectionError("specify --area or --areas-file")
-    database = Database(settings.database)
+    database = database_for(settings)
     database.migrate()
     _, catalog = database.load_area_catalog(settings.catalog_version)
     validate_area_ids(values, catalog)

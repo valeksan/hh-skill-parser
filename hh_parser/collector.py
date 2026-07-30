@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from .normalization import normalize_api_vacancy
+from .areas import resolve_russia_geography
 from .query_specs import QuerySpec
 from .storage import Database
 
@@ -18,6 +19,7 @@ class Collector:
         self.database = database
         self.transport = transport
         self.loaded_ids: set[str] = set()
+        self._catalog_by_run: dict[int, dict[str, Any] | None] = {}
 
     def start(
         self, config: dict[str, Any], area_ids: list[str], *, catalog_version_id: int | None = None,
@@ -98,7 +100,7 @@ class Collector:
                     self.loaded_ids.add(vacancy_id)
                     try:
                         payload = detail(candidate)
-                        snapshot = normalize_api_vacancy(payload)
+                        snapshot = self._normalize_snapshot(run_id, payload)
                         self._store_snapshot(run_id, vacancy_id, snapshot)
                         self.database.resolve_errors(
                             run_id, "vacancy", vacancy_hh_id=vacancy_id
@@ -346,7 +348,7 @@ class Collector:
                 continue
             self.loaded_ids.add(vacancy_id)
             try:
-                snapshot = normalize_api_vacancy(detail(candidate))
+                snapshot = self._normalize_snapshot(run_id, detail(candidate))
                 self._store_snapshot(run_id, vacancy_id, snapshot)
                 self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
             except Exception as error:
@@ -360,6 +362,19 @@ class Collector:
     def _store_snapshot(self, run_id: int, vacancy_id: str, snapshot: dict[str, Any]) -> None:
         """Persist durable source snapshot only; extractors run offline."""
         self.database.record_snapshot(run_id, vacancy_id, snapshot)
+
+    def _normalize_snapshot(self, run_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Normalize card with geography from run's frozen `/areas` catalog."""
+        if run_id not in self._catalog_by_run:
+            config = self.database.run_config(run_id)
+            catalog_version_id = config.get("catalog_version_id")
+            self._catalog_by_run[run_id] = (
+                self.database.load_area_catalog(catalog_version_id)[1]
+                if catalog_version_id is not None else None
+            )
+        catalog = self._catalog_by_run[run_id]
+        geography = resolve_russia_geography((payload.get("area") or {}).get("id"), catalog) if catalog else None
+        return normalize_api_vacancy(payload, geography=geography)
 
     def _stored_page_is_last(
         self, run_id: int, query_id: int, area_id: int, page: int,

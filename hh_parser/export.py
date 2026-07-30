@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .storage import Database
+from .privacy import safe_employer_name
 
 
 VACANCY_FIELDS = (
@@ -88,7 +89,12 @@ def export_vacancies(
     with Path(path).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=VACANCY_FIELDS)
         writer.writeheader()
-        writer.writerows(dict(row) for row in rows)
+        for row in rows:
+            exported = dict(row)
+            exported["employer_name"] = safe_employer_name(
+                exported["employer_id"], exported["employer_type"], exported["employer_name"],
+            )
+            writer.writerow(exported)
     return len(rows)
 
 

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from .storage import Database
+from .privacy import safe_employer_name
 
 FIELDS = ("snapshot_id", "hh_id", "title", "description", "employer", "query_families", "auto_label", "auto_score", "auto_reasons", "manual_label", "manual_reason", "effective_label", "effective_reason")
 
@@ -51,7 +52,7 @@ def export_labeling(
     with database.connect() as connection:
         rows = connection.execute(
             "SELECT s.id snapshot_id, s.vacancy_hh_id hh_id, s.title, s.description_text description, "
-            "s.employer_name employer, COALESCE((SELECT group_concat(query_group, '|') FROM ("
+            "s.employer_id _employer_id, s.employer_type _employer_type, s.employer_name employer, COALESCE((SELECT group_concat(query_group, '|') FROM ("
             "SELECT DISTINCT COALESCE(q.query_group, '') AS query_group "
             "FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id "
             "WHERE h.vacancy_hh_id=s.vacancy_hh_id ORDER BY query_group)), '') query_families, "
@@ -61,7 +62,10 @@ def export_labeling(
             "FROM vacancy_snapshots s JOIN effective_relevance_labels l ON l.snapshot_id=s.id "
             "ORDER BY s.id"
         ).fetchall()
-    rows = stratified_sample([dict(row) for row in rows], sample_size, sample_seed)
+    rows = [dict(row) for row in rows]
+    for row in rows:
+        row["employer"] = safe_employer_name(row["_employer_id"], row["_employer_type"], row["employer"])
+    rows = stratified_sample(rows, sample_size, sample_seed)
     with Path(path).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()

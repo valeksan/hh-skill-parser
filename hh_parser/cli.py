@@ -291,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     purge_raw.add_argument("--before", required=True, type=parse_iso_date)
     purge_raw.add_argument("--execute", action="store_true", help="perform purge; default is preview")
     purge_raw.add_argument("--confirm", help="required exact value: PURGE_RAW_PAYLOADS")
+    inspect_raw = maintenance_commands.add_parser("inspect-raw", help="decompress one sanitized raw payload to a file")
+    inspect_raw.add_argument("--snapshot-id", required=True, type=positive_int)
+    inspect_raw.add_argument("--output", required=True, help="destination file; payload is never printed")
 
     db = commands.add_parser("db", help="database lifecycle commands")
     add_database_arguments(db)
@@ -544,6 +547,10 @@ def run_maintenance(settings: argparse.Namespace) -> dict[str, Any]:
     """Run explicit, narrowly scoped maintenance action."""
     database = database_for(settings)
     database.migrate()
+    if settings.maintenance_command == "inspect-raw":
+        payload, content_type = database.read_raw_payload(settings.snapshot_id)
+        Path(settings.output).write_bytes(payload)
+        return {"snapshot_id": settings.snapshot_id, "output": str(settings.output), "bytes": len(payload), "content_type": content_type}
     if settings.maintenance_command != "purge-raw":
         raise ValueError(f"unsupported maintenance command: {settings.maintenance_command}")
     if not settings.execute:

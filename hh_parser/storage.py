@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -562,6 +563,24 @@ class Database:
             )
         summary["purged"] = int(cursor.rowcount)
         return summary
+
+    def read_raw_payload(self, snapshot_id: int) -> tuple[bytes, str]:
+        """Return one sanitized raw payload after strict decompression validation."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT raw_payload, raw_compression, raw_content_type FROM vacancy_snapshots WHERE id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"snapshot not found: {snapshot_id}")
+        if row["raw_payload"] is None:
+            raise ValueError(f"raw payload unavailable for snapshot: {snapshot_id}")
+        if row["raw_compression"] != "gzip":
+            raise ValueError(f"unsupported raw compression: {row['raw_compression'] or 'none'}")
+        try:
+            return gzip.decompress(row["raw_payload"]), str(row["raw_content_type"] or "application/octet-stream")
+        except (OSError, EOFError) as error:
+            raise ValueError(f"invalid gzip raw payload for snapshot: {snapshot_id}") from error
 
     _RESET_TABLES = (
         "extraction_errors", "extraction_runs", "vacancy_skills", "skill_aliases", "skills",

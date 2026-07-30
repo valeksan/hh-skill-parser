@@ -14,12 +14,13 @@ from bs4 import BeautifulSoup
 from .storage import json_value, utc_now
 
 REDACTED_KEYS = {
-    "address", "contacts", "contact", "contact_person", "email", "emails", "phone",
-    "phones", "metro", "lat", "lng", "latitude", "longitude", "coordinates",
+    "address", "addresses", "contacts", "contact", "contact_person", "contactperson", "email", "emails",
+    "phone", "phones", "mobile", "mobile_phone", "telegram", "whatsapp", "skype", "metro",
+    "lat", "lng", "latitude", "longitude", "coordinates", "geo_lat", "geo_lon",
 }
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
-PHONE_RE = re.compile(r"(?<!\d)(?:\+?7|8)[\s().-]*\d(?:[\s().-]*\d){8,10}(?!\d)")
-ADDRESS_LINE_RE = re.compile(r"(?im)^\s*(?:адрес|место работы)\s*:\s*[^\n<]+")
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?7|8|\+?375|\+?380)[\s().-]*\d(?:[\s().-]*\d){8,11}(?!\d)")
+ADDRESS_LINE_RE = re.compile(r"(?im)^\s*(?:адрес|место работы|местоположение|location)\s*:\s*[^\n<]+")
 REDACTION_VERSION = "1"
 
 

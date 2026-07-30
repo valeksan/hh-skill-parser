@@ -110,6 +110,13 @@ hh-skill-parser maintenance --database hh_mobilization.sqlite3 purge-raw --befor
   --execute --confirm PURGE_RAW_PAYLOADS
 ```
 
+Проверка одного уже redacted raw payload не печатает BLOB в терминал или export:
+
+```bash
+hh-skill-parser maintenance --database hh_mobilization.sqlite3 inspect-raw \
+  --snapshot-id 42 --output snapshot-42.raw
+```
+
 ## Полный новый скан
 
 Обычный `collect` никогда не очищает прошлые результаты. Для полного старта с

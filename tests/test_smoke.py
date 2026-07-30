@@ -1,6 +1,7 @@
 import csv
 import gzip
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -422,6 +423,7 @@ class DatabaseTests(unittest.TestCase):
         self.database.record_snapshot(run_id, "export-1", {
             "content_hash": "export-hash", "title": "Воинский учет", "source": "api",
             "description_text": "Бронирование", "area_id": 1, "area_name": "Москва",
+            "employer_id": "private-42", "employer_name": "ИП Иванов Иван Иванович", "employer_type": "individual",
             "published_at": "2026-07-01T12:00:00+00:00", "roles": [{"id": "1", "name": "Специалист"}],
         })
         snapshot_id = self.database.snapshot_id("export-1", "export-hash")
@@ -438,6 +440,10 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(exported[0]["effective_label"], "relevant")
         self.assertEqual(exported[0]["query_families"], "military")
         self.assertEqual(exported[0]["roles"], '[{"id":"1","name":"Специалист"}]')
+        self.assertEqual(exported[0]["employer_id"], "private-42")
+        self.assertEqual(exported[0]["employer_type"], "individual")
+        self.assertTrue(exported[0]["employer_name"].startswith("private-employer-"))
+        self.assertNotIn("Иванов", exported[0]["employer_name"])
 
         settings = build_research_parser().parse_args([
             "export", "--database", str(self.database.path), "vacancies", "--output", str(output),
@@ -1432,6 +1438,44 @@ class NormalizationTests(unittest.TestCase):
             "not_provided_by_source",
         )
         self.assertTrue(snapshot["redaction_applied"])
+
+    def test_redaction_is_recursive_and_raw_hash_uses_only_redacted_payload(self):
+        payload = {
+            "id": "nested", "name": "Специалист", "description": "location: Secret street 1",
+            "metadata": [{"contactPerson": {"email": "nested@example.com"}, "telegram": "@private"}],
+            "office": {"geo_lat": 55.75, "geo_lon": 37.62},
+        }
+        snapshot = normalize_api_vacancy(payload)
+        raw = gzip.decompress(snapshot["raw_payload"])
+        self.assertNotIn(b"nested@example.com", raw)
+        self.assertNotIn(b"@private", raw)
+        self.assertNotIn(b"55.75", raw)
+        self.assertNotIn(b"Secret street", raw)
+        self.assertEqual(snapshot["raw_hash"], hashlib.sha256(raw).hexdigest())
+        self.assertNotEqual(snapshot["raw_hash"], hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+
+    def test_inspect_raw_writes_one_decompressed_payload_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = database.start_run({"fixture": "inspect-raw"})
+            database.upsert_vacancy("1", source="api")
+            snapshot = normalize_api_vacancy({"id": "1", "name": "Специалист", "description": "mail@example.com"})
+            database.record_snapshot(run_id, "1", snapshot)
+            snapshot_id = database.snapshot_id("1", snapshot["content_hash"])
+            output = Path(temp_dir) / "raw.json"
+            settings = build_research_parser().parse_args([
+                "maintenance", "--database", str(database.path), "inspect-raw",
+                "--snapshot-id", str(snapshot_id), "--output", str(output),
+            ])
+            result = run_maintenance(settings)
+            inspected = output.read_text(encoding="utf-8")
+            with database.connect() as connection:
+                stored = connection.execute("SELECT raw_payload FROM vacancy_snapshots WHERE id = ?", (snapshot_id,)).fetchone()[0]
+        self.assertEqual(result["content_type"], "application/json")
+        self.assertIn("[redacted-email]", inspected)
+        self.assertNotIn("mail@example.com", inspected)
+        self.assertIsNotNone(stored)
 
     def test_snapshot_metadata_creates_normalized_multivalue_links(self):
         with tempfile.TemporaryDirectory() as temp_dir:

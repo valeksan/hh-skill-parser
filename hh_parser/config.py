@@ -16,7 +16,7 @@ ALLOWED: dict[str, set[str]] = {
     "database": {"path", "wal", "busy_timeout_ms"},
     "collection": {
         "mode", "max_pages", "areas_file", "areas_source", "area_root", "area_level",
-        "date_from", "date_to", "date_slice_min_days", "date_overlap_days",
+        "date_from", "date_to", "date_slice_min_days", "date_overlap_days", "incremental_overlap_days",
     },
     "search": {"queries_file"},
 }
@@ -63,6 +63,7 @@ def cli_defaults(config: dict[str, Any]) -> dict[str, Any]:
         "date_from": collection.get("date_from"), "date_to": collection.get("date_to"),
         "date_slice_min_days": collection.get("date_slice_min_days"),
         "date_overlap_days": collection.get("date_overlap_days"),
+        "incremental_overlap_days": collection.get("incremental_overlap_days"),
         "queries_file": search.get("queries_file"),
     }
     return {key: value for key, value in defaults.items() if value is not None}
@@ -102,3 +103,9 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("[collection].max_pages must be between 1 and 20")
     if collection.get("mode") is not None and collection["mode"] not in {"incremental", "full"}:
         raise ValueError("[collection].mode must be incremental or full")
+    for key in ("date_slice_min_days", "date_overlap_days", "incremental_overlap_days"):
+        value = collection.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            raise ValueError(f"[collection].{key} must be a non-negative integer")
+    if collection.get("date_slice_min_days") is not None and collection["date_slice_min_days"] < 1:
+        raise ValueError("[collection].date_slice_min_days must be positive")

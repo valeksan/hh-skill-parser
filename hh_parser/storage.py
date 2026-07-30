@@ -152,6 +152,30 @@ class Database:
         with self.transaction() as tx:
             tx.execute(sql, values)
 
+    def collection_watermark(self, scope_hash: str) -> str | None:
+        """Return latest fully covered date for one immutable collection scope."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT watermark_date FROM collection_watermarks WHERE scope_hash = ?",
+                (scope_hash,),
+            ).fetchone()
+        return str(row["watermark_date"]) if row else None
+
+    def advance_collection_watermark(
+        self, scope_hash: str, scope: dict[str, Any], watermark_date: str, run_id: int,
+        *, connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Advance, never rewind, successful coverage for a compatible scope."""
+        sql = (
+            "INSERT INTO collection_watermarks(scope_hash, scope_json, watermark_date, run_id, advanced_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope_hash) DO UPDATE SET "
+            "scope_json=excluded.scope_json, watermark_date=excluded.watermark_date, "
+            "run_id=excluded.run_id, advanced_at=excluded.advanced_at "
+            "WHERE excluded.watermark_date > collection_watermarks.watermark_date"
+        )
+        self._execute(sql, (scope_hash, json_value(scope), watermark_date, run_id, utc_now()), connection)
+
     def prepare_run_resume(
         self, run_id: int, *, connection: sqlite3.Connection | None = None
     ) -> None:

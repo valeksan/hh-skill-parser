@@ -26,7 +26,10 @@ class Collector:
         selection_source: str = "explicit", source_policy: str = "api",
     ) -> int:
         self.database.migrate()
-        run_id = self.database.start_run(config, source_policy=source_policy)
+        run_id = self.database.start_run(
+            config, source_policy=source_policy,
+            collection_mode=config.get("effective_mode", config.get("collection_mode", "incremental")),
+        )
         self.database.set_run_areas(
             run_id, area_ids, catalog_version_id=catalog_version_id, selection_source=selection_source,
         )
@@ -208,7 +211,15 @@ class Collector:
                     http_status=event.get("http_status"),
                 )
         counters = self.database.run_counters(run_id)
-        self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
+        status = "completed" if not counters["errors"] else "degraded"
+        self.database.finish_run(run_id, status, counters)
+        config = self.database.run_config(run_id)
+        if status == "completed" and config.get("effective_mode") == "incremental":
+            scope_hash = config.get("watermark_scope_hash")
+            watermark_date = config.get("effective_date_to")
+            scope = config.get("watermark_scope")
+            if isinstance(scope_hash, str) and isinstance(watermark_date, str) and isinstance(scope, dict):
+                self.database.advance_collection_watermark(scope_hash, scope, watermark_date, run_id)
         return counters
 
     def resume_paginated(

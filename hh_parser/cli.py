@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -57,6 +58,48 @@ def validate_date_range(date_from: str | None, date_to: str | None) -> None:
         raise ValueError("--date-from and --date-to must be specified together")
     if date_from and date_from > date_to:
         raise ValueError("--date-from must not be after --date-to")
+
+
+def collection_scope(
+    *, queries: list[QuerySpec], area_ids: list[str], catalog_version_id: int | None,
+    settings: argparse.Namespace,
+) -> dict[str, Any]:
+    """Return only fields whose changes require an independent watermark."""
+    return {
+        "query_specs": freeze_query_specs(queries), "area_ids": area_ids,
+        "catalog_version_id": catalog_version_id, "source": settings.source,
+        "host": settings.host, "locale": settings.locale, "max_pages": settings.max_pages,
+        "date_slice_min_days": settings.date_slice_min_days,
+        "date_overlap_days": settings.date_overlap_days,
+    }
+
+
+def scope_hash(scope: dict[str, Any]) -> str:
+    """Hash deterministic compatible-scope identity without collection window."""
+    encoded = json.dumps(scope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def resolve_collection_window(
+    settings: argparse.Namespace, database: Database, watermark_scope_hash: str,
+) -> tuple[str, str, str | None]:
+    """Resolve finite effective window before run creation or network activity."""
+    if settings.collection_mode == "full":
+        validate_date_range(settings.date_from, settings.date_to)
+        if not settings.date_from:
+            raise ValueError("full collection requires --date-from and --date-to")
+        return settings.date_from, settings.date_to, None
+    if settings.incremental_overlap_days < 0:
+        raise ValueError("incremental overlap must be non-negative")
+    watermark = database.collection_watermark(watermark_scope_hash)
+    end = settings.date_to or date.today().isoformat()
+    if watermark:
+        start = (date.fromisoformat(watermark) - timedelta(days=settings.incremental_overlap_days)).isoformat()
+    else:
+        start = settings.date_from or end
+    if start > end:
+        raise ValueError("effective incremental window starts after --date-to")
+    return start, end, watermark
 
 
 def load_query_file(path: str | Path):
@@ -145,12 +188,19 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--area-level", choices=["root", "children", "leaf"], default="root")
     collect.add_argument("--catalog-version", type=int)
     collect.add_argument("--allow-area-overlap", action="store_true")
-    collect.add_argument("--collection-mode", choices=["incremental", "full"], default="incremental")
+    collect.add_argument(
+        "--collection-mode", choices=["incremental", "full"], default="incremental",
+        help="incremental continues compatible watermark; full requires explicit date range",
+    )
     collect.add_argument("--max-pages", type=int, default=20)
-    collect.add_argument("--date-from", type=parse_iso_date)
-    collect.add_argument("--date-to", type=parse_iso_date)
+    collect.add_argument("--date-from", type=parse_iso_date, help="inclusive initial/full window start (YYYY-MM-DD)")
+    collect.add_argument("--date-to", type=parse_iso_date, help="inclusive window end; incremental defaults to today")
     collect.add_argument("--date-slice-min-days", type=int, default=1)
     collect.add_argument("--date-overlap-days", type=int, default=1)
+    collect.add_argument(
+        "--incremental-overlap-days", type=nonnegative_int, default=1,
+        help="days to rescan before compatible incremental watermark",
+    )
     add_transport_arguments(collect)
 
     resume = commands.add_parser("resume", help="resume one degraded/interrupted SQLite run")
@@ -319,11 +369,17 @@ def run_collect(
     """Start finite DB-backed collection and return run ID with durable counters."""
     database = database_for(settings)
     database.migrate()
-    validate_date_range(settings.date_from, settings.date_to)
     if settings.date_slice_min_days < 1 or settings.date_overlap_days < 0:
         raise ValueError("date slice minimum must be positive; overlap must be non-negative")
     area_ids, catalog_version_id, selection_source = resolve_collect_areas(settings, database)
     queries = load_query_file(settings.queries_file)
+    watermark_scope = collection_scope(
+        queries=queries, area_ids=area_ids, catalog_version_id=catalog_version_id, settings=settings,
+    )
+    watermark_scope_hash = scope_hash(watermark_scope)
+    effective_date_from, effective_date_to, watermark_before = resolve_collection_window(
+        settings, database, watermark_scope_hash,
+    )
     source = source_factory(settings)
     config = {
         "queries_file": str(settings.queries_file), "query_specs": freeze_query_specs(queries), "area_ids": area_ids,
@@ -333,28 +389,27 @@ def run_collect(
         "database_wal": settings.wal, "database_busy_timeout_ms": settings.busy_timeout_ms,
         "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
-        "date_from": settings.date_from, "date_to": settings.date_to,
+        "date_from": effective_date_from, "date_to": effective_date_to,
         "date_slice_min_days": settings.date_slice_min_days,
         "date_overlap_days": settings.date_overlap_days,
+        "incremental_overlap_days": settings.incremental_overlap_days,
+        "effective_mode": settings.collection_mode,
+        "effective_date_from": effective_date_from, "effective_date_to": effective_date_to,
+        "watermark_before": watermark_before, "watermark_scope": watermark_scope,
+        "watermark_scope_hash": watermark_scope_hash,
     }
     collector = Collector(database, transport=source)
     run_id = collector.start(
         config, area_ids, catalog_version_id=catalog_version_id,
         selection_source=selection_source, source_policy=settings.source,
     )
-    if settings.date_from:
-        counters = collector.collect_sliced(
-            run_id, area_ids, queries, search_page=source.search_page,
-            detail=source.detail, max_pages=settings.max_pages,
-            date_from=settings.date_from, date_to=settings.date_to,
-            min_window_days=settings.date_slice_min_days,
-            overlap_days=settings.date_overlap_days,
-        )
-    else:
-        counters = collector.collect_paginated(
-            run_id, area_ids, queries, search_page=source.search_page,
-            detail=source.detail, max_pages=settings.max_pages,
-        )
+    counters = collector.collect_sliced(
+        run_id, area_ids, queries, search_page=source.search_page,
+        detail=source.detail, max_pages=settings.max_pages,
+        date_from=effective_date_from, date_to=effective_date_to,
+        min_window_days=settings.date_slice_min_days,
+        overlap_days=settings.date_overlap_days,
+    )
     return run_id, counters
 
 
@@ -371,12 +426,13 @@ def run_resume(
     }
     source_settings = argparse.Namespace(**source_options)
     source = source_factory(source_settings)
-    if config.get("date_from"):
+    if config.get("effective_date_from", config.get("date_from")):
         return Collector(database, transport=source).resume_sliced(
             settings.run_id, load_frozen_query_specs(config, settings.queries_file),
             search_page=source.search_page, detail=source.detail,
             max_pages=config.get("max_pages", settings.max_pages),
-            date_from=config["date_from"], date_to=config["date_to"],
+            date_from=config.get("effective_date_from", config["date_from"]),
+            date_to=config.get("effective_date_to", config["date_to"]),
             min_window_days=config.get("date_slice_min_days", 1),
             overlap_days=config.get("date_overlap_days", 1),
         )

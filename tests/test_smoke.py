@@ -26,7 +26,7 @@ from hh_parser.export import export_query_hits, export_roles, export_skills, exp
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
-    apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
+    apply_defaults, build_parser as build_research_parser, run_collect, run_resume, resolve_collection_window,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
     run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats,
 )
@@ -324,7 +324,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql"],
         )
         self.assertTrue(
             {
@@ -334,6 +334,7 @@ class DatabaseTests(unittest.TestCase):
                 "features",
                 "skills", "skill_aliases", "vacancy_skills",
                 "extraction_runs", "extraction_errors",
+                "collection_watermarks",
             }.issubset(tables)
         )
 
@@ -1029,6 +1030,98 @@ class DatabaseTests(unittest.TestCase):
             ("мобилизац*", ("name", "description")),
             ("мобилизац*", ("name", "description")),
         ])
+
+    def test_incremental_uses_compatible_watermark_overlap_and_advances_only_when_complete(self):
+        self.database.store_area_catalog(
+            [{"id": "113", "name": "Россия", "areas": [
+                {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+            ]}], source_url="https://api.hh.ru/areas",
+        )
+        queries_path = Path(self.temp_dir.name) / "queries.txt"
+        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        parser = build_research_parser()
+
+        class Source:
+            def __init__(self, fail_detail=False):
+                self.windows = []
+                self.fail_detail = fail_detail
+
+            def search_page(self, _query, _area, *, page, date_from=None, date_to=None):
+                self.windows.append((page, date_from, date_to))
+                return [{"id": "123", "name": "Специалист", "_source": "api"}], True
+
+            def detail(self, candidate):
+                if self.fail_detail:
+                    raise RuntimeError("temporary")
+                return {"id": candidate["id"], "name": "Специалист"}
+
+        first = Source()
+        first_run, first_counts = run_collect(parser.parse_args([
+            "collect", "--database", str(self.database.path), "--queries-file", str(queries_path), "--area", "1",
+            "--date-from", "2026-01-01", "--date-to", "2026-01-10", "--incremental-overlap-days", "2",
+        ]), source_factory=lambda _: first)
+        self.assertEqual(first_counts["errors"], 0)
+        self.assertEqual(first.windows, [(0, "2026-01-01", "2026-01-10")])
+        first_config = self.database.run_config(first_run)
+        self.assertEqual((first_config["effective_mode"], first_config["effective_date_from"], first_config["effective_date_to"]), ("incremental", "2026-01-01", "2026-01-10"))
+        self.assertEqual(self.database.collection_watermark(first_config["watermark_scope_hash"]), "2026-01-10")
+
+        second = Source()
+        second_run, second_counts = run_collect(parser.parse_args([
+            "collect", "--database", str(self.database.path), "--queries-file", str(queries_path), "--area", "1",
+            "--date-to", "2026-01-15", "--incremental-overlap-days", "2",
+        ]), source_factory=lambda _: second)
+        self.assertEqual(second_counts["errors"], 0)
+        self.assertEqual(second.windows, [(0, "2026-01-08", "2026-01-15")])
+        second_config = self.database.run_config(second_run)
+        self.assertEqual(second_config["watermark_before"], "2026-01-10")
+        self.assertEqual(self.database.collection_watermark(second_config["watermark_scope_hash"]), "2026-01-15")
+        with self.database.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM vacancy_snapshots WHERE vacancy_hh_id = '123'").fetchone()[0], 1)
+
+        broken = Source(fail_detail=True)
+        broken_run, broken_counts = run_collect(parser.parse_args([
+            "collect", "--database", str(self.database.path), "--queries-file", str(queries_path), "--area", "1",
+            "--date-to", "2026-01-20", "--incremental-overlap-days", "2",
+        ]), source_factory=lambda _: broken)
+        self.assertEqual(broken_counts["errors"], 1)
+        broken_config = self.database.run_config(broken_run)
+        self.assertEqual(self.database.collection_watermark(broken_config["watermark_scope_hash"]), "2026-01-15")
+
+    def test_full_requires_explicit_window_and_does_not_create_watermark(self):
+        self.database.store_area_catalog(
+            [{"id": "113", "name": "Россия", "areas": [
+                {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+            ]}], source_url="https://api.hh.ru/areas",
+        )
+        queries_path = Path(self.temp_dir.name) / "queries.txt"
+        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        parser = build_research_parser()
+        settings = parser.parse_args(["collect", "--collection-mode", "full", "--area", "1"])
+        with self.assertRaisesRegex(ValueError, "full collection requires"):
+            resolve_collection_window(settings, self.database, "scope")
+        calls = []
+
+        class Source:
+            @staticmethod
+            def search_page(_query, _area, *, page, date_from=None, date_to=None):
+                calls.append((page, date_from, date_to))
+                return [], True
+
+            @staticmethod
+            def detail(candidate):
+                return candidate
+
+        run_id, counters = run_collect(parser.parse_args([
+            "collect", "--database", str(self.database.path), "--collection-mode", "full", "--area", "1",
+            "--queries-file", str(queries_path), "--date-from", "2025-01-01", "--date-to", "2025-12-31",
+        ]), source_factory=lambda _: Source())
+        self.assertEqual((counters, calls), ({"found": 0, "unique": 0, "loaded": 0, "errors": 0}, [(0, "2025-01-01", "2025-12-31")]))
+        config = self.database.run_config(run_id)
+        with self.database.connect() as connection:
+            mode = connection.execute("SELECT collection_mode FROM collection_runs WHERE id = ?", (run_id,)).fetchone()[0]
+            watermarks = connection.execute("SELECT COUNT(*) FROM collection_watermarks").fetchone()[0]
+        self.assertEqual((mode, config["effective_mode"], watermarks), ("full", "full", 0))
 
     def test_paginated_collector_records_each_page_and_flags_depth_saturation(self):
         collector = Collector(self.database)

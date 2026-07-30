@@ -26,7 +26,9 @@ python -m unittest tests.test_smoke
 hh-skill-parser areas sync
 
 # Новая DB-backed коллекция. --area можно повторять.
-hh-skill-parser collect --area 1 --area 2 --area 13 --area 7
+# Первый incremental range задаёт нижнюю границу; без неё собирается только today.
+# Последующие идут от compatible watermark с overlap (default: 1 day).
+hh-skill-parser collect --area 1 --area 2 --area 13 --area 7 --date-from 2026-01-01
 
 # Либо использовать проверяемый файл HH area ID.
 hh-skill-parser areas validate --areas-file areas.txt
@@ -34,6 +36,9 @@ hh-skill-parser collect --areas-file areas.txt
 
 # Продолжение того же run после сбоя.
 hh-skill-parser resume --run-id RUN_ID
+
+# Full — отдельный historical range; старые snapshots не удаляет.
+hh-skill-parser collect --collection-mode full --area 1 --date-from 2025-01-01 --date-to 2025-12-31
 
 # Производные данные строятся отдельно, только из SQLite, без запросов к HH.
 hh-skill-parser extract relevance
@@ -50,6 +55,9 @@ hh-skill-parser stats --snapshot latest --query-family military
 
 Run ID и счётчики печатаются в JSON. Область, страницы, hits, snapshots и ошибки
 сохраняются в SQLite; повторный запуск не требует удаления progress-файлов.
+Watermark продвигается только после полного successful incremental run; degraded
+run оставляет его прежним. `full` не очищает history и не меняет incremental
+watermark.
 `extract` по умолчанию обрабатывает latest snapshot каждой вакансии. Фильтры
 `--run-id`, `--area`, `--source`, `--date-from/--date-to` ограничивают выборку.
 Автоматические labels/features/skills не выполняются при `collect`/`resume`.

@@ -87,6 +87,9 @@ hh-skill-parser db --database hh_mobilization.sqlite3 reset
 
 # Необратимо очистить collected/derived data. Schema и migrations сохранятся.
 hh-skill-parser db --database hh_mobilization.sqlite3 reset --yes
+
+# Проверить SQLite без изменения data.
+hh-skill-parser db --database hh_mobilization.sqlite3 check
 ```
 
 ## Команды `parse_skills.py`

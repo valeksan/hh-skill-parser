@@ -459,6 +459,16 @@ class Database:
             ).fetchone()[0]
         return {"found": found, "unique": unique, "loaded": loaded, "errors": errors}
 
+    def run_config(self, run_id: int) -> dict[str, Any]:
+        """Load immutable, redacted run configuration for safe resume."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT config_json FROM collection_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"run {run_id} does not exist")
+        return json.loads(row["config_json"])
+
     def store_area_catalog(
         self, tree: list[dict[str, Any]], *, source_url: str, host: str = "hh.ru",
         locale: str = "RU", connection: sqlite3.Connection | None = None,

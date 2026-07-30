@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 from collections.abc import Callable
@@ -18,6 +19,23 @@ from .storage import Database
 
 DEFAULT_DATABASE = "hh_mobilization.sqlite3"
 DEFAULT_USER_AGENT = "hh-skill-parser/1.0 (contact@example.invalid)"
+
+
+def parse_iso_date(value: str) -> str:
+    """Validate stable date-only backfill boundary accepted by HH API."""
+    try:
+        date.fromisoformat(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from error
+    return value
+
+
+def validate_date_range(date_from: str | None, date_to: str | None) -> None:
+    """Require finite, ordered date window when either bound is requested."""
+    if bool(date_from) != bool(date_to):
+        raise ValueError("--date-from and --date-to must be specified together")
+    if date_from and date_from > date_to:
+        raise ValueError("--date-from must not be after --date-to")
 
 
 def load_query_file(path: str | Path) -> list[str]:
@@ -56,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--allow-area-overlap", action="store_true")
     collect.add_argument("--collection-mode", choices=["incremental", "full"], default="incremental")
     collect.add_argument("--max-pages", type=int, default=20)
+    collect.add_argument("--date-from", type=parse_iso_date)
+    collect.add_argument("--date-to", type=parse_iso_date)
     add_transport_arguments(collect)
 
     resume = commands.add_parser("resume", help="resume one degraded/interrupted SQLite run")
@@ -109,6 +129,7 @@ def run_collect(
     """Start finite DB-backed collection and return run ID with durable counters."""
     database = Database(settings.database)
     database.migrate()
+    validate_date_range(settings.date_from, settings.date_to)
     area_ids, catalog_version_id, selection_source = resolve_collect_areas(settings, database)
     queries = load_query_file(settings.queries_file)
     source = source_factory(settings)
@@ -117,6 +138,7 @@ def run_collect(
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
+        "date_from": settings.date_from, "date_to": settings.date_to,
     }
     collector = Collector(database)
     run_id = collector.start(
@@ -126,6 +148,7 @@ def run_collect(
     counters = collector.collect_paginated(
         run_id, area_ids, queries, search_page=source.search_page,
         detail=source.detail, max_pages=settings.max_pages,
+        date_from=settings.date_from, date_to=settings.date_to,
     )
     return run_id, counters
 
@@ -136,10 +159,12 @@ def run_resume(
     """Resume DB work without rediscovering areas or losing previous pages/cards."""
     database = Database(settings.database)
     database.migrate()
+    config = database.run_config(settings.run_id)
     source = source_factory(settings)
     return Collector(database).resume_paginated(
         settings.run_id, load_query_file(settings.queries_file),
         search_page=source.search_page, detail=source.detail, max_pages=settings.max_pages,
+        date_from=config.get("date_from"), date_to=config.get("date_to"),
     )
 
 

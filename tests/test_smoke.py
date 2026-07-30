@@ -18,6 +18,7 @@ from hh_parser.areas import (
 )
 from hh_parser.collector import Collector
 from hh_parser.cli import build_parser as build_research_parser, run_collect, run_resume
+from hh_parser.sources.api import HHApiSource
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -489,7 +490,7 @@ class DatabaseTests(unittest.TestCase):
                 self.search_calls = 0
                 self.detail_calls = 0
 
-            def search_page(self, query, area_id, *, page):
+            def search_page(self, query, area_id, *, page, date_from=None, date_to=None):
                 self.search_calls += 1
                 if page != 0:
                     raise AssertionError("unexpected extra page")
@@ -520,7 +521,7 @@ class DatabaseTests(unittest.TestCase):
         run_id = collector.start({"fixture": True}, ["1"])
         requested_pages = []
 
-        def search_page(query, area_id, *, page):
+        def search_page(query, area_id, *, page, date_from=None, date_to=None):
             requested_pages.append(page)
             return ([{"id": str(page), "name": "Специалист", "_source": "api"}], page == 1)
 
@@ -534,7 +535,7 @@ class DatabaseTests(unittest.TestCase):
         saturated_run = Collector(self.database).start({"fixture": "saturated"}, ["1"])
         saturated = Collector(self.database).collect_paginated(
             saturated_run, ["1"], ["воинский учет"],
-            search_page=lambda query, area_id, *, page: ([], False),
+            search_page=lambda query, area_id, *, page, **_: ([], False),
             detail=lambda candidate: candidate, max_pages=1,
         )
         self.assertEqual(saturated["errors"], 1)
@@ -543,6 +544,27 @@ class DatabaseTests(unittest.TestCase):
                 "SELECT error_type FROM collection_errors WHERE run_id = ?", (saturated_run,)
             ).fetchone()[0]
         self.assertEqual(error_type, "SearchDepthSaturated")
+
+    def test_date_window_is_persisted_and_reused_by_resume(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": "dates"}, ["1"])
+        calls = []
+
+        def search_page(query, area_id, *, page, date_from=None, date_to=None):
+            calls.append((page, date_from, date_to))
+            return ([{"id": "123", "name": "Специалист", "_source": "api"}], True)
+
+        collector.collect_paginated(
+            run_id, ["1"], ["воинский учет"], search_page=search_page,
+            detail=lambda candidate: {"id": candidate["id"], "name": "Специалист"},
+            date_from="2026-01-01", date_to="2026-01-31",
+        )
+        with self.database.connect() as connection:
+            page = connection.execute(
+                "SELECT date_from, date_to FROM search_pages WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        self.assertEqual(calls, [(0, "2026-01-01", "2026-01-31")])
+        self.assertEqual(tuple(page), ("2026-01-01", "2026-01-31"))
 
 
 class NormalizationTests(unittest.TestCase):
@@ -612,6 +634,37 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(snapshot["raw_content_type"], "text/html")
         self.assertNotIn("mail@example.com", raw_html)
         self.assertIn("[redacted-email]", raw_html)
+
+
+class ApiSourceTests(unittest.TestCase):
+    def test_api_source_uses_one_hh_identity_header_and_date_window_params(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"items": [{"id": "1", "name": "Специалист"}], "pages": 1}
+
+        class Session:
+            def __init__(self):
+                self.headers = {}
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return Response()
+
+        session = Session()
+        source = HHApiSource(user_agent="test-app/1.0 (dev@example.com)", session=session)
+        items, is_last = source.search_page(
+            "воинский учет", "1", page=0, date_from="2026-01-01", date_to="2026-01-31",
+        )
+        self.assertEqual(items[0]["_source"], "api")
+        self.assertTrue(is_last)
+        self.assertEqual(session.headers["HH-User-Agent"], "test-app/1.0 (dev@example.com)")
+        self.assertNotIn("User-Agent", session.headers)
+        self.assertNotIn("Authorization", session.headers)
+        self.assertEqual(session.calls[0][1]["params"]["date_to"], "2026-01-31")
 
 
 class AreaTests(unittest.TestCase):

@@ -23,7 +23,7 @@ class HHApiSource:
         self.timeout = timeout
         self.session = session or requests.Session()
         self.session.headers.update({
-            "User-Agent": user_agent,
+            "HH-User-Agent": user_agent,
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
         })
@@ -37,15 +37,22 @@ class HHApiSource:
 
     def search_page(
         self, expression: str, area_id: str, *, page: int, per_page: int = 100,
+        date_from: str | None = None, date_to: str | None = None,
     ) -> tuple[list[dict[str, Any]], bool]:
         """Fetch one documented page and report whether it is final."""
         if not 1 <= per_page <= 100:
             raise ValueError("per_page must be between 1 and 100")
         if page < 0:
             raise ValueError("page must not be negative")
+        if bool(date_from) != bool(date_to):
+            raise ValueError("date_from and date_to must be provided together")
+        params = {"text": expression, "area": area_id, "per_page": per_page, "page": page}
+        if date_from:
+            params["date_from"] = date_from
+            params["date_to"] = date_to
         response = self.session.get(
             f"{self.base_url}/vacancies",
-            params={"text": expression, "area": area_id, "per_page": per_page, "page": page},
+            params=params,
             timeout=self.timeout,
         )
         response.raise_for_status()

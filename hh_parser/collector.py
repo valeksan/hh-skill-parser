@@ -112,10 +112,13 @@ class Collector:
         self, run_id: int, area_ids: Iterable[str], queries: Iterable[str], *,
         search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
         detail: Callable[[dict[str, Any]], dict[str, Any]], max_pages: int = 20,
+        date_from: str | None = None, date_to: str | None = None,
     ) -> dict[str, int]:
         """Collect paginated API work units; flag depth saturation for slicing."""
         if not 1 <= max_pages <= 20:
             raise ValueError("max_pages must be between 1 and 20")
+        if bool(date_from) != bool(date_to):
+            raise ValueError("date_from and date_to must be provided together")
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
             for expression in queries:
@@ -123,14 +126,21 @@ class Collector:
                 for page in range(max_pages):
                     if self.database.search_page_succeeded(
                         run_id, query_id, area_id=int(area_id), page=page,
+                        date_from=date_from, date_to=date_to,
                     ):
                         candidates = self.database.load_query_hits(
                             run_id, query_id, area_id=int(area_id), page=page,
+                            date_from=date_from, date_to=date_to,
                         )
-                        is_last = self._stored_page_is_last(run_id, query_id, int(area_id), page)
+                        is_last = self._stored_page_is_last(
+                            run_id, query_id, int(area_id), page, date_from, date_to,
+                        )
                     else:
                         try:
-                            candidates, is_last = search_page(expression, str(area_id), page=page)
+                            candidates, is_last = search_page(
+                                expression, str(area_id), page=page,
+                                date_from=date_from, date_to=date_to,
+                            )
                             for rank, candidate in enumerate(candidates):
                                 vacancy_id = str(candidate["id"])
                                 self.database.upsert_vacancy(
@@ -139,11 +149,12 @@ class Collector:
                                 )
                                 self.database.record_query_hit(
                                     run_id, query_id, vacancy_id, area_id=int(area_id),
-                                    page=page, rank=rank,
+                                    page=page, rank=rank, date_from=date_from, date_to=date_to,
                                 )
                             self.database.record_search_page(
                                 run_id, query_id, page=page, area_id=int(area_id),
-                                http_status=200, result_count=len(candidates), is_last_page=is_last,
+                                date_from=date_from, date_to=date_to, http_status=200,
+                                result_count=len(candidates), is_last_page=is_last,
                             )
                             self.database.resolve_errors(
                                 run_id, "search", query_id=query_id, area_id=int(area_id),
@@ -151,6 +162,7 @@ class Collector:
                         except Exception as error:
                             self.database.record_search_page(
                                 run_id, query_id, page=page, area_id=int(area_id),
+                                date_from=date_from, date_to=date_to,
                                 error_type=type(error).__name__, error_message=str(error),
                             )
                             self.database.record_error(
@@ -178,12 +190,14 @@ class Collector:
         self, run_id: int, queries: Iterable[str], *,
         search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
         detail: Callable[[dict[str, Any]], dict[str, Any]], max_pages: int = 20,
+        date_from: str | None = None, date_to: str | None = None,
     ) -> dict[str, int]:
         """Resume paginated collection from DB pages and frozen areas."""
         self.database.prepare_run_resume(run_id)
         return self.collect_paginated(
             run_id, self.database.get_run_areas(run_id), queries,
             search_page=search_page, detail=detail, max_pages=max_pages,
+            date_from=date_from, date_to=date_to,
         )
 
     def _load_candidates(
@@ -206,12 +220,15 @@ class Collector:
                     area_id=area_id, vacancy_hh_id=vacancy_id,
                 )
 
-    def _stored_page_is_last(self, run_id: int, query_id: int, area_id: int, page: int) -> bool:
+    def _stored_page_is_last(
+        self, run_id: int, query_id: int, area_id: int, page: int,
+        date_from: str | None, date_to: str | None,
+    ) -> bool:
         """Read final-page marker when resuming a successful page."""
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT is_last_page FROM search_pages WHERE run_id = ? AND query_id = ? "
-                "AND area_id = ? AND date_from = '' AND date_to = '' AND page = ?",
-                (run_id, query_id, area_id, page),
+                "AND area_id = ? AND date_from = ? AND date_to = ? AND page = ?",
+                (run_id, query_id, area_id, date_from or "", date_to or "", page),
             ).fetchone()
         return bool(row["is_last_page"]) if row else False

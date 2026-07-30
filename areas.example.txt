@@ -1,0 +1,9 @@
+# HH area IDs only. Comments and blank lines are ignored.
+# Validate after catalog sync:
+# hh-skill-parser areas validate --areas-file areas.example.txt
+
+# Moscow
+1
+
+# Saint Petersburg
+2

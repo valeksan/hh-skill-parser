@@ -28,6 +28,10 @@ hh-skill-parser areas sync
 # Новая DB-backed коллекция. --area можно повторять.
 hh-skill-parser collect --area 1 --area 2 --area 13 --area 7
 
+# Либо использовать проверяемый файл HH area ID.
+hh-skill-parser areas validate --areas-file areas.txt
+hh-skill-parser collect --areas-file areas.txt
+
 # Продолжение того же run после сбоя.
 hh-skill-parser resume --run-id RUN_ID
 
@@ -52,6 +56,23 @@ Run ID и счётчики печатаются в JSON. Область, стр�
 `export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
+
+## Конфигурация DB-backed CLI
+
+Скопируйте `config.example.toml` в `config.toml`. Реальный token в example не
+хранится. Приоритет настроек: явный CLI argument → environment → TOML → built-in
+default. `HH_ACCESS_TOKEN` перекрывает `[hh].access_token`; token редактируется
+перед записью run config и не попадает в SQLite, JSON output или errors.
+
+```bash
+cp config.example.toml config.toml
+hh-skill-parser collect --config config.toml --areas-file areas.txt
+```
+
+`areas.txt` содержит ровно один HH area ID на строку. Пустые строки, строки с
+`#` и inline comment разрешены. Пример — `areas.example.txt`. Перед первым
+сбором каталог должен быть сохранён через `areas sync`; collection фиксирует
+его version в run и `resume` не обновляет scope.
 
 Skill discovery review создаёт новый dictionary file, исходный не меняет:
 
@@ -174,11 +195,18 @@ Alias объединяет только варианты одного навык
 
 ## Фильтрация
 
-После поиска вакансии дополнительно проверяются по названию. Фильтр допускает формулировки, связанные с мобилизацией, воинским/военным учётом, бронированием, ГО/ЧС, первым отделом, режимно-секретной работой и защитой гостайны. Он отсекает очевидно нерелевантные результаты, попавшие из HTML-поиска.
+DB-backed collector сохраняет каждый query hit до загрузки карточки и не делает
+title-only rejection. Relevance/features/skills вычисляются отдельными offline
+командами. Описанный ниже title filter относится только к legacy
+`parse_skills.py`.
 
 ## Сеть и ограничения HH
 
-HTML-сбор может быть ограничен антибот-защитой HH. Скрипт использует браузерный `User-Agent`, задержки между страницами и карточками, а также поддерживает proxy через `HTTPS_PROXY`, `HTTP_PROXY` или параметр `--proxy` основного скрипта.
+DB-backed collector uses public `https://api.hh.ru` JSON API with one
+`HH-User-Agent`, optional Bearer token, gzip and bounded transient retries.
+Invalid token is removed after one auth event; run continues unauthenticated.
+Legacy HTML collection may be limited by anti-bot protection and uses its own
+legacy browser/proxy settings.
 
 Сорок запросов по десяти зонам — длительный сбор. Для продолжения используйте
 `hh-skill-parser resume --run-id RUN_ID`.

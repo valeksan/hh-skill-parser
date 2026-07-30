@@ -7,7 +7,7 @@ BINARY_NAME ?= hh-skill-parser
 .PHONY: help \
 	install install-full install-chart install-cli install-bundle \
 	run run-html run-lite run-key-skills \
-	collect resume \
+	collect resume areas-sync db-check db-checkpoint \
 	smoke \
 	bundle \
 	clean
@@ -17,6 +17,8 @@ help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  install/p;/^  help/p'
 	@printf "\nRun\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  run/p'
+	@printf "\nCollection / DB\n"
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  collect/p;/^  resume/p;/^  areas-sync/p;/^  db-/p'
 	@printf "\nTest\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  smoke/p'
 	@printf "\nBuild\n"
@@ -56,6 +58,15 @@ collect: ## Start DB-backed collection (pass AREAS='--area 1 --area 2')
 
 resume: ## Resume DB-backed collection (pass RUN_ID=123)
 	$(PYTHON) -m hh_parser.cli resume --run-id $(RUN_ID)
+
+areas-sync: ## Fetch versioned HH area catalog
+	$(PYTHON) -m hh_parser.cli areas sync
+
+db-check: ## Run SQLite integrity check (pass DATABASE=path)
+	$(PYTHON) -m hh_parser.cli db --database $(or $(DATABASE),hh_mobilization.sqlite3) check
+
+db-checkpoint: ## Checkpoint SQLite WAL (pass DATABASE=path)
+	$(PYTHON) -m hh_parser.cli db --database $(or $(DATABASE),hh_mobilization.sqlite3) checkpoint
 
 smoke: ## Run local smoke tests
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v

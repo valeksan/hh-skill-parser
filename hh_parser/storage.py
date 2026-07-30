@@ -136,6 +136,22 @@ class Database:
         with self.transaction() as tx:
             tx.execute(sql, values)
 
+    def prepare_run_resume(
+        self, run_id: int, *, connection: sqlite3.Connection | None = None
+    ) -> None:
+        """Reopen an existing finite run without changing its frozen scope."""
+        sql = (
+            "UPDATE collection_runs SET status = 'running', finished_at = NULL "
+            "WHERE id = ? AND status IN ('running', 'degraded', 'failed', 'cancelled')"
+        )
+        if connection is not None:
+            cursor = connection.execute(sql, (run_id,))
+            if cursor.rowcount != 1:
+                raise ValueError(f"run {run_id} is missing or already completed")
+            return
+        with self.transaction() as tx:
+            self.prepare_run_resume(run_id, connection=tx)
+
     def upsert_query(
         self,
         expression: str,
@@ -239,8 +255,9 @@ class Database:
         missing = required - snapshot.keys()
         if missing:
             raise ValueError(f"snapshot missing required fields: {sorted(missing)}")
+        observed_at = snapshot.get("observed_at", utc_now())
         values = (
-            str(vacancy_hh_id), run_id, snapshot.get("observed_at", utc_now()),
+            str(vacancy_hh_id), run_id, observed_at,
             snapshot["content_hash"], snapshot["title"], snapshot.get("description_html"),
             snapshot.get("description_text"), snapshot.get("published_at"), snapshot.get("created_at"),
             snapshot.get("expires_at"), snapshot.get("archived"), snapshot.get("employer_id"),
@@ -252,20 +269,39 @@ class Database:
             snapshot.get("raw_content_type"), snapshot.get("raw_compression"), snapshot.get("raw_size"),
             snapshot.get("raw_hash"), int(snapshot.get("redaction_applied", False)),
             snapshot.get("redaction_version"), json_value(snapshot.get("redaction_types", [])),
+            observed_at,
         )
         sql = (
             "INSERT INTO vacancy_snapshots(vacancy_hh_id, run_id, observed_at, content_hash, title, description_html, "
             "description_text, published_at, created_at, expires_at, archived, employer_id, employer_name, area_id, "
             "area_name, federal_district, federal_subject, locality, salary_from, salary_to, salary_currency, salary_gross, "
             "salary_frequency, source, completeness_json, raw_payload, raw_content_type, raw_compression, raw_size, raw_hash, "
-            "redaction_applied, redaction_version, redaction_types_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "redaction_applied, redaction_version, redaction_types_json, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(vacancy_hh_id, content_hash) DO NOTHING"
         )
+        def store(tx: sqlite3.Connection) -> bool:
+            inserted = tx.execute(sql, values).rowcount == 1
+            row = tx.execute(
+                "SELECT id FROM vacancy_snapshots WHERE vacancy_hh_id = ? AND content_hash = ?",
+                (str(vacancy_hh_id), snapshot["content_hash"]),
+            ).fetchone()
+            snapshot_id = int(row["id"])
+            tx.execute(
+                "UPDATE vacancy_snapshots SET last_seen_at = ? WHERE id = ?",
+                (observed_at, snapshot_id),
+            )
+            tx.execute(
+                "INSERT INTO vacancy_snapshot_observations(run_id, vacancy_hh_id, snapshot_id, observed_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(run_id, snapshot_id) DO UPDATE SET "
+                "observed_at = excluded.observed_at",
+                (run_id, str(vacancy_hh_id), snapshot_id, observed_at),
+            )
+            return inserted
         if connection is not None:
-            return connection.execute(sql, values).rowcount == 1
+            return store(connection)
         with self.transaction() as tx:
-            return tx.execute(sql, values).rowcount == 1
+            return store(tx)
 
     def record_error(
         self, run_id: int, stage: str, error_type: str, message: str, *,
@@ -282,6 +318,95 @@ class Database:
             "http_status, message, attempt, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             values, connection,
         )
+
+    def resolve_errors(
+        self, run_id: int, stage: str, *, query_id: int | None = None,
+        area_id: int | None = None, vacancy_hh_id: str | int | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Mark matching retryable failures resolved after successful work."""
+        clauses = ["run_id = ?", "stage = ?", "resolved_at IS NULL"]
+        values: list[Any] = [run_id, stage]
+        for column, value in (
+            ("query_id", query_id), ("area_id", area_id),
+            ("vacancy_hh_id", str(vacancy_hh_id) if vacancy_hh_id is not None else None),
+        ):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                values.append(value)
+        sql = f"UPDATE collection_errors SET resolved_at = ? WHERE {' AND '.join(clauses)}"
+        self._execute(sql, (utc_now(), *values), connection)
+
+    def search_page_succeeded(
+        self, run_id: int, query_id: int, *, area_id: int | None = None,
+        page: int = 0, date_from: str | None = None, date_to: str | None = None,
+    ) -> bool:
+        """Return whether one search work unit was durably completed."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM search_pages WHERE run_id = ? AND query_id = ? AND area_id = ? "
+                "AND date_from = ? AND date_to = ? AND page = ? "
+                "AND http_status BETWEEN 200 AND 299 AND error_type IS NULL",
+                (run_id, query_id, area_id if area_id is not None else -1,
+                 date_from or "", date_to or "", page),
+            ).fetchone()
+        return row is not None
+
+    def load_query_hits(
+        self, run_id: int, query_id: int, *, area_id: int | None = None,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Rebuild minimal detail work items from durable query hits."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT h.vacancy_hh_id AS id, h.rank, v.alternate_url, v.latest_source AS _source "
+                "FROM vacancy_query_hits h JOIN vacancies v ON v.hh_id = h.vacancy_hh_id "
+                "WHERE h.run_id = ? AND h.query_id = ? AND h.area_id = ? "
+                "AND h.date_from = ? AND h.date_to = ? ORDER BY h.rank, h.vacancy_hh_id",
+                (run_id, query_id, area_id if area_id is not None else -1,
+                 date_from or "", date_to or ""),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def observed_vacancy_ids(self, run_id: int) -> set[str]:
+        """Return cards already normalized successfully in this run."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT vacancy_hh_id FROM vacancy_snapshot_observations WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        return {str(row["vacancy_hh_id"]) for row in rows}
+
+    def get_run_areas(self, run_id: int) -> list[str]:
+        """Load immutable area worklist for resume."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT area_hh_id FROM run_areas WHERE run_id = ? ORDER BY rowid",
+                (run_id,),
+            ).fetchall()
+        if not rows:
+            raise ValueError(f"run {run_id} has no frozen areas")
+        return [str(row["area_hh_id"]) for row in rows]
+
+    def run_counters(self, run_id: int) -> dict[str, int]:
+        """Calculate durable run counters, including only unresolved errors."""
+        with self.connect() as connection:
+            found = connection.execute(
+                "SELECT COUNT(*) FROM vacancy_query_hits WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+            unique = connection.execute(
+                "SELECT COUNT(DISTINCT vacancy_hh_id) FROM vacancy_query_hits WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            loaded = connection.execute(
+                "SELECT COUNT(DISTINCT vacancy_hh_id) FROM vacancy_snapshot_observations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            errors = connection.execute(
+                "SELECT COUNT(*) FROM collection_errors WHERE run_id = ? AND resolved_at IS NULL",
+                (run_id,),
+            ).fetchone()[0]
+        return {"found": found, "unique": unique, "loaded": loaded, "errors": errors}
 
     def store_area_catalog(
         self, tree: list[dict[str, Any]], *, source_url: str, host: str = "hh.ru",

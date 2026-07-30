@@ -312,7 +312,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql"],
         )
         self.assertTrue(
             {
@@ -387,6 +387,85 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(counters, {"found": 2, "unique": 1, "loaded": 1, "errors": 0})
         self.assertEqual(detail_calls, ["123"])
         self.assertEqual((hit_count, snapshot_count, status), (2, 1, "completed"))
+
+    def test_collector_resumes_after_card_interruption_without_repeating_search_or_loaded_card(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": True}, ["1", "2"])
+        search_calls = []
+        detail_calls = []
+
+        def search(query, area_id):
+            search_calls.append(area_id)
+            return [{"id": area_id, "name": f"Vacancy {area_id}", "_source": "api"}]
+
+        def interrupted_detail(candidate):
+            detail_calls.append(candidate["id"])
+            if candidate["id"] == "2":
+                raise KeyboardInterrupt()
+            return {"id": candidate["id"], "name": f"Vacancy {candidate['id']}"}
+
+        with self.assertRaises(KeyboardInterrupt):
+            collector.collect(
+                run_id, ["1", "2"], ["воинский учет"],
+                search=search, detail=interrupted_detail,
+            )
+
+        resumed_detail_calls = []
+
+        def resumed_detail(candidate):
+            resumed_detail_calls.append(candidate["id"])
+            return {"id": candidate["id"], "name": f"Vacancy {candidate['id']}"}
+
+        counters = Collector(self.database).resume(
+            run_id, ["воинский учет"], search=search, detail=resumed_detail,
+        )
+
+        self.assertEqual(search_calls, ["1", "2"])
+        self.assertEqual(detail_calls, ["1", "2"])
+        self.assertEqual(resumed_detail_calls, ["2"])
+        self.assertEqual(counters, {"found": 2, "unique": 2, "loaded": 2, "errors": 0})
+
+    def test_retry_resolves_card_error_and_observes_unchanged_snapshot(self):
+        first_run = self.database.start_run({"fixture": 1}, source_policy="api")
+        self.database.upsert_vacancy("123", source="api")
+        snapshot = normalize_api_vacancy(
+            {"id": "123", "name": "Специалист"},
+            observed_at="2026-01-01T00:00:00+00:00",
+        )
+        self.assertTrue(self.database.record_snapshot(first_run, "123", snapshot))
+
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": 2}, ["1"])
+        attempts = 0
+
+        def search(query, area_id):
+            return [{"id": "123", "name": "Специалист", "_source": "api"}]
+
+        def flaky_detail(candidate):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary")
+            return {"id": "123", "name": "Специалист"}
+
+        first = collector.collect(
+            run_id, ["1"], ["воинский учет"], search=search, detail=flaky_detail
+        )
+        second = Collector(self.database).resume(
+            run_id, ["воинский учет"], search=search, detail=flaky_detail
+        )
+
+        self.assertEqual(first["errors"], 1)
+        self.assertEqual(second, {"found": 1, "unique": 1, "loaded": 1, "errors": 0})
+        with self.database.connect() as connection:
+            snapshot_count = connection.execute(
+                "SELECT COUNT(*) FROM vacancy_snapshots WHERE vacancy_hh_id = '123'"
+            ).fetchone()[0]
+            resolved = connection.execute(
+                "SELECT resolved_at FROM collection_errors WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+        self.assertEqual(snapshot_count, 1)
+        self.assertIsNotNone(resolved)
 
 
 class NormalizationTests(unittest.TestCase):

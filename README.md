@@ -35,6 +35,9 @@ hh-skill-parser resume --run-id RUN_ID
 hh-skill-parser extract relevance
 hh-skill-parser extract features --snapshot all
 hh-skill-parser extract --skills-file skills_whitelist.txt skills
+
+# Аналитический CSV только из SQLite. Сеть/extract не запускаются.
+hh-skill-parser export vacancies --output vacancies.csv --snapshot latest --relevance relevant
 ```
 
 Run ID и счётчики печатаются в JSON. Область, страницы, hits, snapshots и ошибки
@@ -42,6 +45,8 @@ Run ID и счётчики печатаются в JSON. Область, стр�
 `extract` по умолчанию обрабатывает latest snapshot каждой вакансии. Фильтры
 `--run-id`, `--area`, `--source`, `--date-from/--date-to` ограничивают выборку.
 Автоматические labels/features/skills не выполняются при `collect`/`resume`.
+`export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
+`--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 
 ## Команды `parse_skills.py`
 

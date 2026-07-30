@@ -21,10 +21,11 @@ from hh_parser.areas import (
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features
+from hh_parser.export import export_vacancies
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_import_labeling, run_extract,
+    run_import_labeling, run_extract, run_export_vacancies,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -374,6 +375,37 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual([(row["vacancy_hh_id"], row["title"]) for row in rows], [("fts-1", "Воинский учет")])
         with self.assertRaises(ValueError):
             self.database.search_text("")
+
+    def test_vacancy_export_is_db_only_and_honors_filters(self):
+        run_id = self.database.start_run({"fixture": "vacancy-export"})
+        query_id = self.database.upsert_query("воинский учет", query_group="military")
+        self.database.upsert_vacancy("export-1", source="api")
+        self.database.record_query_hit(run_id, query_id, "export-1", area_id=1)
+        self.database.record_snapshot(run_id, "export-1", {
+            "content_hash": "export-hash", "title": "Воинский учет", "source": "api",
+            "description_text": "Бронирование", "area_id": 1, "area_name": "Москва",
+            "published_at": "2026-07-01T12:00:00+00:00", "roles": [{"id": "1", "name": "Специалист"}],
+        })
+        snapshot_id = self.database.snapshot_id("export-1", "export-hash")
+        self.database.upsert_auto_relevance(snapshot_id, "relevant", 1.0, ["signal"], "test")
+        output = Path(self.temp_dir.name) / "vacancies.csv"
+        rows = export_vacancies(
+            self.database, output, area_ids=["1"], relevance="relevant", query_family="military",
+            date_from="2026-07-01", date_to="2026-07-01",
+        )
+        with output.open(encoding="utf-8", newline="") as handle:
+            exported = list(csv.DictReader(handle))
+        self.assertEqual(rows, 1)
+        self.assertEqual(exported[0]["hh_id"], "export-1")
+        self.assertEqual(exported[0]["effective_label"], "relevant")
+        self.assertEqual(exported[0]["query_families"], "military")
+        self.assertEqual(exported[0]["roles"], '[{"id":"1","name":"Специалист"}]')
+
+        settings = build_research_parser().parse_args([
+            "export", "--database", str(self.database.path), "vacancies", "--output", str(output),
+            "--snapshot", "all", "--run-id", str(run_id),
+        ])
+        self.assertEqual(run_export_vacancies(settings), 1)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

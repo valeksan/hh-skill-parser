@@ -18,6 +18,7 @@ from .areas import (
 )
 from .collector import Collector
 from .extractors.offline import extract as run_extraction
+from .export import export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
 from .query_specs import load_query_specs
@@ -123,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
     labeling_export.add_argument("--output", required=True)
     labeling_export.add_argument("--sample-size", type=nonnegative_int, default=0)
     labeling_export.add_argument("--sample-seed", default="0")
+    vacancies_export = export_commands.add_parser("vacancies", help="export vacancy snapshots CSV")
+    vacancies_export.add_argument("--output", required=True)
+    vacancies_export.add_argument("--snapshot", choices=["latest", "all"], default="latest")
+    vacancies_export.add_argument("--run-id", action="append", type=int, default=[])
+    vacancies_export.add_argument("--area", action="append", default=[])
+    vacancies_export.add_argument("--relevance", choices=["relevant", "borderline", "irrelevant", "unknown"])
+    vacancies_export.add_argument("--query-family")
+    vacancies_export.add_argument("--date-from", type=parse_iso_date)
+    vacancies_export.add_argument("--date-to", type=parse_iso_date)
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
@@ -271,6 +281,19 @@ def run_export_labeling(settings: argparse.Namespace) -> int:
     )
 
 
+def run_export_vacancies(settings: argparse.Namespace) -> int:
+    """Write filtered vacancy CSV without invoking HH or an extractor."""
+    validate_date_range(settings.date_from, settings.date_to)
+    database = Database(settings.database)
+    database.migrate()
+    return export_vacancies(
+        database, settings.output, snapshot_scope=settings.snapshot,
+        run_ids=settings.run_id or None, area_ids=settings.area or None,
+        relevance=settings.relevance, query_family=settings.query_family,
+        date_from=settings.date_from, date_to=settings.date_to,
+    )
+
+
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
     database = Database(settings.database)
@@ -359,7 +382,8 @@ def main(argv: list[str] | None = None) -> None:
             counters = run_resume(settings)
             print(json.dumps({"run_id": settings.run_id, **counters}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "export":
-            print(json.dumps({"rows": run_export_labeling(settings)}, ensure_ascii=False, sort_keys=True))
+            rows = run_export_labeling(settings) if settings.export_command == "labeling" else run_export_vacancies(settings)
+            print(json.dumps({"rows": rows}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "areas":
             if settings.areas_command == "sync":
                 print(json.dumps({"catalog_version": run_areas_sync(settings)}, sort_keys=True))

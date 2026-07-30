@@ -516,6 +516,12 @@ class Database:
         with self.connect() as connection:
             return [str(row[0]) for row in connection.execute("PRAGMA integrity_check")]
 
+    def checkpoint(self) -> dict[str, int]:
+        """Checkpoint WAL without deleting source/derived rows."""
+        with self.connect() as connection:
+            row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        return {"busy": int(row[0]), "log_frames": int(row[1]), "checkpointed_frames": int(row[2])}
+
     def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
         """Create durable run metadata for a local, rebuildable extractor."""
         if kind not in {"relevance", "features", "skills"}:

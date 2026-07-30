@@ -21,13 +21,13 @@ from hh_parser.areas import (
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features, repost_fingerprint
-from hh_parser.export import export_vacancies
+from hh_parser.export import export_skills, export_vacancies
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_vacancies, run_maintenance, run_stats,
+    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -536,6 +536,26 @@ class DatabaseTests(unittest.TestCase):
             "--skills-file", str(source), "--output", str(output_cli),
         ])
         self.assertEqual(run_import_skill_candidates(settings), 2)
+
+    def test_skill_export_writes_normalized_latest_evidence(self):
+        run_id = self.database.start_run({"fixture": "skill-export"})
+        self.database.upsert_vacancy("skill-export-1", source="api")
+        self.database.record_snapshot(run_id, "skill-export-1", {
+            "content_hash": "skill-export-hash", "title": "Воинский учет", "source": "api",
+            "description_text": "Военный учет сотрудников",
+        })
+        dictionary_file = Path(self.temp_dir.name) / "skills.txt"
+        dictionary_file.write_text("воинский учет | военный учет\n", encoding="utf-8")
+        run_offline_extraction(self.database, "skills", skill_dictionary=load_skill_dictionary(dictionary_file))
+        output = Path(self.temp_dir.name) / "skills.csv"
+        self.assertEqual(export_skills(self.database, output), 2)
+        with output.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual({row["source"] for row in rows}, {"title", "description"})
+        settings = build_research_parser().parse_args([
+            "export", "--database", str(self.database.path), "skills", "--output", str(output),
+        ])
+        self.assertEqual(run_export_skills(settings), 2)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

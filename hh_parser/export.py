@@ -19,6 +19,11 @@ VACANCY_FIELDS = (
     "key_skills", "languages", "department_id", "department_name", "vacancy_type_id",
     "completeness", "effective_label", "query_families",
 )
+SKILL_FIELDS = (
+    "snapshot_id", "hh_id", "title", "published_at", "area_id", "area_name",
+    "skill", "topic_family", "dictionary_version", "source", "matched_alias",
+    "match_count", "extractor_version",
+)
 
 
 def export_vacancies(
@@ -78,6 +83,21 @@ def export_vacancies(
         rows = connection.execute(query, values).fetchall()
     with Path(path).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=VACANCY_FIELDS)
+        writer.writeheader()
+        writer.writerows(dict(row) for row in rows)
+    return len(rows)
+
+
+def export_skills(database: Database, path: str | Path) -> int:
+    """Write normalized latest vacancy-skill evidence CSV from SQLite only."""
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT snapshot_id, vacancy_hh_id AS hh_id, title, published_at, area_id, area_name, "
+            "skill, topic_family, dictionary_version, source, matched_alias, match_count, extractor_version "
+            "FROM vacancy_skill_matrix ORDER BY snapshot_id, skill, source, matched_alias"
+        ).fetchall()
+    with Path(path).open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=SKILL_FIELDS)
         writer.writeheader()
         writer.writerows(dict(row) for row in rows)
     return len(rows)

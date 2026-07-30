@@ -38,6 +38,7 @@ hh-skill-parser extract --skills-file skills_whitelist.txt skills
 
 # Аналитический CSV только из SQLite. Сеть/extract не запускаются.
 hh-skill-parser export vacancies --output vacancies.csv --snapshot latest --relevance relevant
+hh-skill-parser export skills --output vacancy_skills.csv
 
 # JSON counts по той же offline выборке.
 hh-skill-parser stats --snapshot latest --query-family military

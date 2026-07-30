@@ -448,6 +448,21 @@ class Database:
             snapshots.append(snapshot)
         return snapshots
 
+    def search_text(self, query: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Search stored title/description FTS index; never contacts HH."""
+        if not query.strip():
+            raise ValueError("FTS query must not be empty")
+        if not 1 <= limit <= 10_000:
+            raise ValueError("FTS limit must be between 1 and 10000")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id, s.vacancy_hh_id, s.title, s.description_text, fts.rank "
+                "FROM vacancy_text_fts fts JOIN vacancy_snapshots s ON s.id = fts.rowid "
+                "WHERE vacancy_text_fts MATCH ? ORDER BY fts.rank LIMIT ?",
+                (query, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
         """Create durable run metadata for a local, rebuildable extractor."""
         if kind not in {"relevance", "features", "skills"}:

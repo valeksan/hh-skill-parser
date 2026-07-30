@@ -320,7 +320,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql"],
         )
         self.assertTrue(
             {
@@ -362,6 +362,18 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(salary["salary_midpoint"], 110000)
         self.assertEqual(matrix_count, 0)
         self.assertEqual(geography_count, 1)
+
+    def test_fts_search_reads_stored_text_only(self):
+        run_id = self.database.start_run({"fixture": "fts"})
+        self.database.upsert_vacancy("fts-1", source="api")
+        self.database.record_snapshot(run_id, "fts-1", {
+            "content_hash": "fts-hash", "title": "Воинский учет",
+            "description_text": "Бронирование сотрудников", "source": "api",
+        })
+        rows = self.database.search_text("воинский")
+        self.assertEqual([(row["vacancy_hh_id"], row["title"]) for row in rows], [("fts-1", "Воинский учет")])
+        with self.assertRaises(ValueError):
+            self.database.search_text("")
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

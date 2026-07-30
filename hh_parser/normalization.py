@@ -68,6 +68,26 @@ def _compressed_json(payload: Any) -> tuple[bytes, str]:
     return gzip.compress(raw_json), hashlib.sha256(raw_json).hexdigest()
 
 
+def _id(value: Any) -> str | None:
+    """Return stable HH ID from an object/string, leaving absent values NULL."""
+    if isinstance(value, dict):
+        value = value.get("id")
+    return str(value) if value is not None else None
+
+
+def _public_list(values: Any) -> list[dict[str, Any]]:
+    """Keep only public ID/name pairs from a multi-value API field."""
+    if not isinstance(values, list):
+        return []
+    result = []
+    for value in values:
+        if isinstance(value, dict):
+            result.append({key: value[key] for key in ("id", "name") if value.get(key) is not None})
+        elif isinstance(value, str):
+            result.append({"name": value})
+    return result
+
+
 def _snapshot(
     data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None
 ) -> dict[str, Any]:
@@ -83,12 +103,21 @@ def _snapshot(
     if isinstance(frequency, dict):
         frequency = frequency.get("id") or frequency.get("name")
 
+    work_format = data.get("work_format") or data.get("work_formats") or []
+    if not isinstance(work_format, list):
+        work_format = [work_format]
+    roles = _public_list(data.get("professional_roles"))
+    industries = _public_list(data.get("industries"))
+    key_skills = _public_list(data.get("key_skills"))
+    languages = _public_list(data.get("languages"))
+    department = data.get("department") or {}
+
     fingerprint = {
         "title": data.get("name", ""), "description_html": description_html,
         "published_at": data.get("published_at"), "created_at": data.get("created_at"),
         "expires_at": data.get("expires_at"), "archived": data.get("archived"),
         "employer_id": employer.get("id"), "employer_name": employer.get("name"),
-        "area_id": area.get("id"), "area_name": area.get("name"), "salary": salary,
+        "raw": redacted_payload,
     }
     content_hash = hashlib.sha256(json_value(fingerprint).encode("utf-8")).hexdigest()
     compressed, raw_hash = _compressed_json(redacted_payload)
@@ -102,6 +131,13 @@ def _snapshot(
         "area_name": area.get("name"), "salary_from": salary.get("from"),
         "salary_to": salary.get("to"), "salary_currency": salary.get("currency"),
         "salary_gross": salary.get("gross"), "salary_frequency": frequency, "source": source,
+        "employer_type": employer.get("type"), "employer_trusted": employer.get("trusted"),
+        "employer_accredited_it": employer.get("accredited_it_employer"),
+        "experience_id": _id(data.get("experience")), "employment_id": _id(data.get("employment")),
+        "schedule_id": _id(data.get("schedule")), "work_formats": _public_list(work_format),
+        "roles": roles, "industries": industries, "key_skills": key_skills, "languages": languages,
+        "department_id": _id(department), "department_name": department.get("name"),
+        "vacancy_type_id": _id(data.get("type")),
         "completeness": {"description": bool(description_text), "published_at": bool(data.get("published_at"))},
         "raw_payload": compressed, "raw_content_type": "application/json",
         "raw_compression": "gzip", "raw_size": len(compressed), "raw_hash": raw_hash,

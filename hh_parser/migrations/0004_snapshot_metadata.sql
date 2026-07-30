@@ -1,0 +1,14 @@
+ALTER TABLE vacancy_snapshots ADD COLUMN employer_type TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN employer_trusted INTEGER;
+ALTER TABLE vacancy_snapshots ADD COLUMN employer_accredited_it INTEGER;
+ALTER TABLE vacancy_snapshots ADD COLUMN experience_id TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN employment_id TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN schedule_id TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN work_format_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE vacancy_snapshots ADD COLUMN roles_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE vacancy_snapshots ADD COLUMN industries_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE vacancy_snapshots ADD COLUMN key_skills_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE vacancy_snapshots ADD COLUMN languages_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE vacancy_snapshots ADD COLUMN department_id TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN department_name TEXT;
+ALTER TABLE vacancy_snapshots ADD COLUMN vacancy_type_id TEXT;

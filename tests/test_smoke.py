@@ -313,7 +313,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql"],
         )
         self.assertTrue(
             {
@@ -551,6 +551,15 @@ class NormalizationTests(unittest.TestCase):
             "contacts": {"email": "user@example.com", "phones": [{"number": "+79991234567"}]},
             "address": {"street": "Ленина", "lat": 55.75, "lng": 37.62, "metro": {"name": "Охотный ряд"}},
             "employer": {"id": "42", "name": "АО Пример"}, "area": {"id": "1", "name": "Москва"},
+            "experience": {"id": "between1And3", "name": "От 1 года до 3 лет"},
+            "employment": {"id": "full", "name": "Полная занятость"},
+            "schedule": {"id": "fullDay", "name": "Полный день"},
+            "work_format": [{"id": "REMOTE", "name": "Удалённо"}],
+            "professional_roles": [{"id": "1", "name": "Специалист"}],
+            "industries": [{"id": "7.540", "name": "Оборонная промышленность"}],
+            "key_skills": [{"name": "Воинский учет"}],
+            "languages": [{"id": "rus", "name": "Русский"}],
+            "department": {"id": "1", "name": "Первый отдел"}, "type": {"id": "open"},
             "salary": {"from": 100000, "to": None, "currency": "RUR", "gross": False},
         }, observed_at="2026-01-01T00:00:00+00:00")
 
@@ -561,6 +570,12 @@ class NormalizationTests(unittest.TestCase):
         self.assertIn("[redacted-email]", snapshot["description_text"])
         self.assertEqual(snapshot["employer_id"], "42")
         self.assertEqual(snapshot["area_name"], "Москва")
+        self.assertEqual(snapshot["experience_id"], "between1And3")
+        self.assertEqual(snapshot["employment_id"], "full")
+        self.assertEqual(snapshot["work_formats"], [{"id": "REMOTE", "name": "Удалённо"}])
+        self.assertEqual(snapshot["roles"], [{"id": "1", "name": "Специалист"}])
+        self.assertEqual(snapshot["key_skills"], [{"name": "Воинский учет"}])
+        self.assertEqual(snapshot["department_name"], "Первый отдел")
         self.assertTrue(snapshot["redaction_applied"])
 
     def test_html_normalization_keeps_compressed_redacted_html(self):

@@ -270,14 +270,24 @@ class Database:
             snapshot.get("raw_hash"), int(snapshot.get("redaction_applied", False)),
             snapshot.get("redaction_version"), json_value(snapshot.get("redaction_types", [])),
             observed_at,
+            snapshot.get("employer_type"), snapshot.get("employer_trusted"),
+            snapshot.get("employer_accredited_it"), snapshot.get("experience_id"),
+            snapshot.get("employment_id"), snapshot.get("schedule_id"),
+            json_value(snapshot.get("work_formats", [])), json_value(snapshot.get("roles", [])),
+            json_value(snapshot.get("industries", [])), json_value(snapshot.get("key_skills", [])),
+            json_value(snapshot.get("languages", [])), snapshot.get("department_id"),
+            snapshot.get("department_name"), snapshot.get("vacancy_type_id"),
         )
         sql = (
             "INSERT INTO vacancy_snapshots(vacancy_hh_id, run_id, observed_at, content_hash, title, description_html, "
             "description_text, published_at, created_at, expires_at, archived, employer_id, employer_name, area_id, "
             "area_name, federal_district, federal_subject, locality, salary_from, salary_to, salary_currency, salary_gross, "
             "salary_frequency, source, completeness_json, raw_payload, raw_content_type, raw_compression, raw_size, raw_hash, "
-            "redaction_applied, redaction_version, redaction_types_json, last_seen_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "redaction_applied, redaction_version, redaction_types_json, last_seen_at, employer_type, "
+            "employer_trusted, employer_accredited_it, experience_id, employment_id, schedule_id, "
+            "work_format_json, roles_json, industries_json, key_skills_json, languages_json, department_id, "
+            "department_name, vacancy_type_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(vacancy_hh_id, content_hash) DO NOTHING"
         )
         def store(tx: sqlite3.Connection) -> bool:

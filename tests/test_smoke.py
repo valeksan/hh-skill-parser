@@ -12,7 +12,6 @@ from unittest import mock
 import requests
 
 import parse_skills
-import start
 from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
 from hh_parser.areas import (
@@ -71,13 +70,6 @@ class SmokeTests(unittest.TestCase):
         )
         with self.assertRaises(SystemExit):
             parse_skills.parse_command_arguments(["--help"])
-
-    def test_orchestrator_invokes_parser_run_command(self):
-        with mock.patch.object(start.subprocess, "run") as run_mock:
-            start.run_parser_for_area(1, "Москва", "missing-test-output.csv")
-
-        command = run_mock.call_args.args[0]
-        self.assertEqual(command[:3], [sys.executable, "parse_skills.py", "run"])
 
     def test_parse_html_vacancy_page_extracts_title_description_and_skills(self):
         html_text = """

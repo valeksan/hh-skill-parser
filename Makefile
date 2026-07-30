@@ -7,6 +7,7 @@ BINARY_NAME ?= hh-skill-parser
 .PHONY: help \
 	install install-full install-chart install-cli install-bundle \
 	run run-html run-lite run-key-skills \
+	collect resume \
 	smoke \
 	bundle \
 	clean
@@ -49,6 +50,12 @@ run-lite: ## Run parser without chart rendering
 
 run-key-skills: ## Run parser with auto HTML description fallback for key-skills
 	$(RUN) --source auto --mode key-skills --html-description-fallback
+
+collect: ## Start DB-backed collection (pass AREAS='--area 1 --area 2')
+	$(PYTHON) -m hh_parser.cli collect $(AREAS)
+
+resume: ## Resume DB-backed collection (pass RUN_ID=123)
+	$(PYTHON) -m hh_parser.cli resume --run-id $(RUN_ID)
 
 smoke: ## Run local smoke tests
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v

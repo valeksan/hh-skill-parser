@@ -1068,6 +1068,32 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertEqual(received, [("name", "description")])
 
+    def test_paginated_collector_persists_actual_safe_api_request_params(self):
+        class Transport:
+            base_url = "https://api.hh.ru"
+
+            @staticmethod
+            def search_request_params(expression, area_id, **kwargs):
+                return {
+                    "text": expression, "area": area_id, "page": kwargs["page"], "per_page": 100,
+                    "host": "hh.ru", "locale": "RU", "search_field": list(kwargs["search_fields"]),
+                }
+
+        run_id = Collector(self.database, transport=Transport()).start({"fixture": "request-params"}, ["1"])
+        Collector(self.database, transport=Transport()).collect_paginated(
+            run_id, ["1"], [QuerySpec("broad", "мобилизац*", search_fields=("name", "description"))],
+            search_page=lambda *_args, **_kwargs: ([], True), detail=lambda candidate: candidate,
+        )
+        with self.database.connect() as connection:
+            page = connection.execute(
+                "SELECT request_url, request_params_json FROM search_pages WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        self.assertEqual(page["request_url"], "https://api.hh.ru/vacancies")
+        self.assertEqual(
+            page["request_params_json"],
+            '{"area":"1","host":"hh.ru","locale":"RU","page":0,"per_page":100,"search_field":["name","description"],"text":"мобилизац*"}',
+        )
+
     def test_saturated_date_window_splits_until_every_child_fits(self):
         collector = Collector(self.database)
         run_id = collector.start({"fixture": "split"}, ["1"])
@@ -1251,6 +1277,38 @@ class ApiSourceTests(unittest.TestCase):
         self.assertNotIn("Authorization", session.headers)
         self.assertEqual(session.calls[0][1]["params"]["date_to"], "2026-01-31")
         self.assertEqual(session.calls[0][1]["params"]["search_field"], ["name", "description"])
+        self.assertEqual(session.calls[0][1]["params"]["host"], "hh.ru")
+        self.assertEqual(session.calls[0][1]["params"]["locale"], "RU")
+
+    def test_api_source_passes_configured_host_and_locale_to_catalog_and_card(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return [] if len(session.calls) == 1 else {"id": "1", "name": "Специалист"}
+
+        class Session:
+            def __init__(self):
+                self.headers = {}
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return Response()
+
+        session = Session()
+        source = HHApiSource(user_agent="test-app/1.0", host="hh.kz", locale="EN", session=session)
+        self.assertEqual(source.areas(), [])
+        source.detail({"id": "1"})
+        self.assertEqual(session.calls[0][1]["params"], {"host": "hh.kz", "locale": "EN"})
+        self.assertEqual(session.calls[1][1]["params"], {"host": "hh.kz", "locale": "EN"})
+
+    def test_api_source_rejects_unknown_host_or_empty_locale(self):
+        with self.assertRaisesRegex(ValueError, "host"):
+            HHApiSource(user_agent="test-app/1.0", host="invalid.example")
+        with self.assertRaisesRegex(ValueError, "locale"):
+            HHApiSource(user_agent="test-app/1.0", locale="")
 
     def test_rejected_bearer_token_retries_public_api_and_emits_one_safe_event(self):
         class Response:

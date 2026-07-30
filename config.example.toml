@@ -3,6 +3,8 @@
 [hh]
 # access_token = ""
 # user_agent = "hh-skill-parser/1.0 (contact@example.invalid)"
+# host = "hh.ru"
+# locale = "RU"
 # request_timeout = 30.0
 # max_retries = 3
 # retry_backoff = 1.0

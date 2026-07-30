@@ -13,11 +13,13 @@ class HHApiSource:
     """Fetch HH vacancy search/detail JSON without browser fallback state."""
 
     base_url = "https://api.hh.ru"
+    allowed_hosts = frozenset({"hh.ru", "rabota.by", "hh1.az", "hh.uz", "hh.kz", "headhunter.ge", "headhunter.kg"})
 
     def __init__(
         self, *, user_agent: str, timeout: float = 30.0,
         access_token: str | None = None, session: requests.Session | None = None,
         max_retries: int = 3, retry_backoff: float = 1.0,
+        host: str = "hh.ru", locale: str = "RU",
         sleep_fn: Callable[[float], None] = sleep,
     ):
         if not user_agent.strip():
@@ -28,10 +30,16 @@ class HHApiSource:
             raise ValueError("HH API max_retries must not be negative")
         if retry_backoff < 0:
             raise ValueError("HH API retry_backoff must not be negative")
+        if host not in self.allowed_hosts:
+            raise ValueError(f"unsupported HH host: {host}")
+        if not locale or not locale.strip():
+            raise ValueError("HH API locale must not be empty")
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.sleep_fn = sleep_fn
+        self.host = host
+        self.locale = locale
         self.session = session or requests.Session()
         self.session.headers.update({
             "HH-User-Agent": user_agent,
@@ -91,7 +99,7 @@ class HHApiSource:
 
     def areas(self) -> list[dict[str, Any]]:
         """Fetch official geographic area catalog."""
-        payload = self._get("/areas").json()
+        payload = self._get("/areas", params=self._host_locale_params()).json()
         if not isinstance(payload, list):
             raise ValueError("HH API areas response must be a list")
         return payload
@@ -108,12 +116,10 @@ class HHApiSource:
             raise ValueError("page must not be negative")
         if bool(date_from) != bool(date_to):
             raise ValueError("date_from and date_to must be provided together")
-        params = {"text": expression, "area": area_id, "per_page": per_page, "page": page}
-        if search_fields:
-            params["search_field"] = list(search_fields)
-        if date_from:
-            params["date_from"] = date_from
-            params["date_to"] = date_to
+        params = self.search_request_params(
+            expression, area_id, page=page, per_page=per_page, date_from=date_from,
+            date_to=date_to, search_fields=search_fields,
+        )
         response = self._get("/vacancies", params=params)
         payload = response.json()
         items = payload.get("items")
@@ -130,9 +136,30 @@ class HHApiSource:
 
     def detail(self, candidate: dict[str, Any]) -> dict[str, Any]:
         """Fetch one vacancy card by HH ID."""
-        response = self._get(f"/vacancies/{candidate['id']}")
+        response = self._get(f"/vacancies/{candidate['id']}", params=self._host_locale_params())
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("HH API vacancy response must be an object")
         payload["_source"] = "api"
         return payload
+
+    def _host_locale_params(self) -> dict[str, str]:
+        """Only documented common API domain/localization parameters."""
+        return {"host": self.host, "locale": self.locale}
+
+    def search_request_params(
+        self, expression: str, area_id: str, *, page: int, per_page: int = 100,
+        date_from: str | None = None, date_to: str | None = None,
+        search_fields: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Build exact safe search params for durable coverage records."""
+        params: dict[str, Any] = {
+            "text": expression, "area": area_id, "per_page": per_page, "page": page,
+            **self._host_locale_params(),
+        }
+        if search_fields:
+            params["search_field"] = list(search_fields)
+        if date_from:
+            params["date_from"] = date_from
+            params["date_to"] = date_to
+        return params

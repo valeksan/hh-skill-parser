@@ -12,7 +12,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 
 ALLOWED: dict[str, set[str]] = {
-    "hh": {"access_token", "user_agent", "request_timeout", "max_retries", "retry_backoff"},
+    "hh": {"access_token", "user_agent", "request_timeout", "max_retries", "retry_backoff", "host", "locale"},
     "database": {"path"},
     "collection": {
         "mode", "max_pages", "areas_file", "areas_source", "area_root", "area_level",
@@ -53,6 +53,7 @@ def cli_defaults(config: dict[str, Any]) -> dict[str, Any]:
     search = config.get("search", {})
     defaults = {
         "access_token": hh.get("access_token"), "user_agent": hh.get("user_agent"),
+        "host": hh.get("host"), "locale": hh.get("locale"),
         "request_timeout": hh.get("request_timeout"), "database": database.get("path"),
         "max_retries": hh.get("max_retries"), "retry_backoff": hh.get("retry_backoff"),
         "collection_mode": collection.get("mode"), "max_pages": collection.get("max_pages"),
@@ -70,7 +71,10 @@ def validate_config(config: dict[str, Any]) -> None:
     """Reject bad scalar types/ranges before database or network activity."""
     hh = config.get("hh", {})
     collection = config.get("collection", {})
-    for section, key in (("hh", "access_token"), ("hh", "user_agent"), ("database", "path")):
+    for section, key in (
+        ("hh", "access_token"), ("hh", "user_agent"), ("hh", "host"),
+        ("hh", "locale"), ("database", "path"),
+    ):
         value = config.get(section, {}).get(key)
         if value is not None and not isinstance(value, str):
             raise ValueError(f"[{section}].{key} must be a string")

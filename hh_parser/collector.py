@@ -262,6 +262,9 @@ class Collector:
                     params = {"page": page, "date_from": date_from, "date_to": date_to}
                     if search_fields:
                         params["search_fields"] = search_fields
+                    request_params = self._search_request_params(
+                        expression, area_id, page, date_from, date_to, search_fields,
+                    )
                     candidates, is_last = search_page(expression, str(area_id), **params)
                     for rank, candidate in enumerate(candidates):
                         vacancy_id = str(candidate["id"])
@@ -277,6 +280,7 @@ class Collector:
                         run_id, query_id, page=page, area_id=area_id,
                         date_from=date_from, date_to=date_to, http_status=200,
                         result_count=len(candidates), is_last_page=is_last,
+                        request_url=self._search_request_url(), request_params=request_params,
                     )
                     self.database.resolve_errors(
                         run_id, "search", query_id=query_id, area_id=area_id,
@@ -288,6 +292,10 @@ class Collector:
                         run_id, query_id, page=page, area_id=area_id,
                         date_from=date_from, date_to=date_to,
                         http_status=http_status, error_type=type(error).__name__, error_message=str(error),
+                        request_url=self._search_request_url(),
+                        request_params=self._search_request_params(
+                            expression, area_id, page, date_from, date_to, search_fields,
+                        ),
                     )
                     self.database.record_error(
                         run_id, "search", type(error).__name__, str(error),
@@ -303,6 +311,29 @@ class Collector:
                 )
                 return False
         return True
+
+    def _search_request_params(
+        self, expression: str, area_id: int, page: int, date_from: str | None,
+        date_to: str | None, search_fields: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Persist request shape without credentials, including API domain/locale."""
+        build = getattr(self.transport, "search_request_params", None)
+        if callable(build):
+            return build(
+                expression, str(area_id), page=page, date_from=date_from,
+                date_to=date_to, search_fields=search_fields,
+            )
+        params: dict[str, Any] = {"text": expression, "area": str(area_id), "per_page": 100, "page": page}
+        if search_fields:
+            params["search_field"] = list(search_fields)
+        if date_from:
+            params["date_from"] = date_from
+            params["date_to"] = date_to
+        return params
+
+    def _search_request_url(self) -> str | None:
+        base_url = getattr(self.transport, "base_url", None)
+        return f"{base_url}/vacancies" if isinstance(base_url, str) else None
 
     def _load_candidates(
         self, run_id: int, candidates: Iterable[dict[str, Any]],

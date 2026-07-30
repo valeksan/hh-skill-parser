@@ -106,6 +106,8 @@ def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", choices=["api"], default="api")
     parser.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
     parser.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
+    parser.add_argument("--host", default="hh.ru")
+    parser.add_argument("--locale", default="RU")
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--max-retries", type=nonnegative_int, default=3)
     parser.add_argument("--retry-backoff", type=float, default=1.0)
@@ -233,8 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     areas_commands = areas.add_subparsers(dest="areas_command", required=True)
     areas_sync = areas_commands.add_parser("sync", help="fetch and store official HH /areas catalog")
     areas_sync.add_argument("--root", default="113")
-    areas_sync.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
-    areas_sync.add_argument("--request-timeout", type=float, default=30.0)
+    add_transport_arguments(areas_sync)
     areas_list = areas_commands.add_parser("list", help="list a frozen catalog selection")
     areas_list.add_argument("--catalog-version", type=int)
     areas_list.add_argument("--root", default="113")
@@ -290,6 +291,7 @@ def make_source(settings: argparse.Namespace) -> HHApiSource:
     return HHApiSource(
         user_agent=settings.user_agent, timeout=settings.request_timeout,
         access_token=getattr(settings, "access_token", None) or None,
+        host=settings.host, locale=settings.locale,
         max_retries=getattr(settings, "max_retries", 3),
         retry_backoff=getattr(settings, "retry_backoff", 1.0),
     )
@@ -311,6 +313,7 @@ def run_collect(
         "queries_file": str(settings.queries_file), "query_specs": freeze_query_specs(queries), "area_ids": area_ids,
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
+        "host": settings.host, "locale": settings.locale,
         "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
         "date_from": settings.date_from, "date_to": settings.date_to,
@@ -345,7 +348,12 @@ def run_resume(
     database = Database(settings.database)
     database.migrate()
     config = database.run_config(settings.run_id)
-    source = source_factory(settings)
+    source_options = {
+        **vars(settings), "host": config.get("host", settings.host),
+        "locale": config.get("locale", settings.locale),
+    }
+    source_settings = argparse.Namespace(**source_options)
+    source = source_factory(source_settings)
     if config.get("date_from"):
         return Collector(database, transport=source).resume_sliced(
             settings.run_id, load_frozen_query_specs(config, settings.queries_file),
@@ -479,6 +487,7 @@ def run_areas_sync(
     source = source_factory(settings)
     catalog_id = database.store_area_catalog(
         source.areas(), source_url=f"{getattr(source, 'base_url', HHApiSource.base_url)}/areas",
+        host=settings.host, locale=settings.locale,
     )
     _, catalog = database.load_area_catalog(catalog_id)
     validate_area_ids([settings.root], catalog)

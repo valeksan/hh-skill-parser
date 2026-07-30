@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import date, timedelta
 from typing import Any
 
 from .normalization import normalize_api_vacancy
@@ -123,65 +124,59 @@ class Collector:
         for area_id in area_ids:
             for expression in queries:
                 query_id = self.database.upsert_query(expression)
-                for page in range(max_pages):
-                    if self.database.search_page_succeeded(
-                        run_id, query_id, area_id=int(area_id), page=page,
-                        date_from=date_from, date_to=date_to,
-                    ):
-                        candidates = self.database.load_query_hits(
-                            run_id, query_id, area_id=int(area_id), page=page,
-                            date_from=date_from, date_to=date_to,
-                        )
-                        is_last = self._stored_page_is_last(
-                            run_id, query_id, int(area_id), page, date_from, date_to,
-                        )
-                    else:
-                        try:
-                            candidates, is_last = search_page(
-                                expression, str(area_id), page=page,
-                                date_from=date_from, date_to=date_to,
-                            )
-                            for rank, candidate in enumerate(candidates):
-                                vacancy_id = str(candidate["id"])
-                                self.database.upsert_vacancy(
-                                    vacancy_id, source=candidate.get("_source", "api"),
-                                    alternate_url=candidate.get("alternate_url"),
-                                )
-                                self.database.record_query_hit(
-                                    run_id, query_id, vacancy_id, area_id=int(area_id),
-                                    page=page, rank=rank, date_from=date_from, date_to=date_to,
-                                )
-                            self.database.record_search_page(
-                                run_id, query_id, page=page, area_id=int(area_id),
-                                date_from=date_from, date_to=date_to, http_status=200,
-                                result_count=len(candidates), is_last_page=is_last,
-                            )
-                            self.database.resolve_errors(
-                                run_id, "search", query_id=query_id, area_id=int(area_id),
-                            )
-                        except Exception as error:
-                            self.database.record_search_page(
-                                run_id, query_id, page=page, area_id=int(area_id),
-                                date_from=date_from, date_to=date_to,
-                                error_type=type(error).__name__, error_message=str(error),
-                            )
-                            self.database.record_error(
-                                run_id, "search", type(error).__name__, str(error),
-                                query_id=query_id, area_id=int(area_id),
-                            )
-                            break
-                    self._load_candidates(run_id, candidates, detail, query_id, int(area_id))
-                    if is_last:
-                        self.database.resolve_errors(
-                            run_id, "coverage", query_id=query_id, area_id=int(area_id),
-                        )
-                        break
-                else:
+                saturated = self._collect_search_unit(
+                    run_id, query_id, expression, int(area_id), search_page, detail,
+                    max_pages=max_pages, date_from=date_from, date_to=date_to,
+                )
+                if saturated:
                     self.database.record_error(
                         run_id, "coverage", "SearchDepthSaturated",
                         f"reached {max_pages * 100} result depth; split by date window",
                         query_id=query_id, area_id=int(area_id),
+                        date_from=date_from, date_to=date_to,
                     )
+        counters = self.database.run_counters(run_id)
+        self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
+        return counters
+
+    def collect_sliced(
+        self, run_id: int, area_ids: Iterable[str], queries: Iterable[str], *,
+        search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
+        detail: Callable[[dict[str, Any]], dict[str, Any]], max_pages: int = 20,
+        date_from: str, date_to: str, min_window_days: int = 1,
+        overlap_days: int = 1,
+    ) -> dict[str, int]:
+        """Split saturated finite date windows until every unit fits API depth."""
+        if not 1 <= max_pages <= 20:
+            raise ValueError("max_pages must be between 1 and 20")
+        if min_window_days < 1 or overlap_days < 0:
+            raise ValueError("min_window_days must be positive and overlap_days non-negative")
+        self.loaded_ids = self.database.observed_vacancy_ids(run_id)
+        for area_id in area_ids:
+            for expression in queries:
+                query_id = self.database.upsert_query(expression)
+                pending = [(date_from, date_to)]
+                while pending:
+                    window_from, window_to = pending.pop(0)
+                    saturated = self._collect_search_unit(
+                        run_id, query_id, expression, int(area_id), search_page, detail,
+                        max_pages=max_pages, date_from=window_from, date_to=window_to,
+                    )
+                    if not saturated:
+                        continue
+                    children = split_date_window(
+                        window_from, window_to, min_window_days=min_window_days,
+                        overlap_days=overlap_days,
+                    )
+                    if children:
+                        pending.extend(children)
+                    else:
+                        self.database.record_error(
+                            run_id, "coverage", "SearchDepthSaturated",
+                            f"cannot split {window_from}..{window_to} below {min_window_days} day(s)",
+                            query_id=query_id, area_id=int(area_id),
+                            date_from=window_from, date_to=window_to,
+                        )
         counters = self.database.run_counters(run_id)
         self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
         return counters
@@ -199,6 +194,86 @@ class Collector:
             search_page=search_page, detail=detail, max_pages=max_pages,
             date_from=date_from, date_to=date_to,
         )
+
+    def resume_sliced(
+        self, run_id: int, queries: Iterable[str], *,
+        search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
+        detail: Callable[[dict[str, Any]], dict[str, Any]], max_pages: int,
+        date_from: str, date_to: str, min_window_days: int, overlap_days: int,
+    ) -> dict[str, int]:
+        """Resume deterministic date-window split tree from stored pages."""
+        self.database.prepare_run_resume(run_id)
+        return self.collect_sliced(
+            run_id, self.database.get_run_areas(run_id), queries,
+            search_page=search_page, detail=detail, max_pages=max_pages,
+            date_from=date_from, date_to=date_to, min_window_days=min_window_days,
+            overlap_days=overlap_days,
+        )
+
+    def _collect_search_unit(
+        self, run_id: int, query_id: int, expression: str, area_id: int,
+        search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
+        detail: Callable[[dict[str, Any]], dict[str, Any]], *, max_pages: int,
+        date_from: str | None, date_to: str | None,
+    ) -> bool:
+        """Collect one query×area×window. Return True only for API-depth saturation."""
+        for page in range(max_pages):
+            if self.database.search_page_succeeded(
+                run_id, query_id, area_id=area_id, page=page,
+                date_from=date_from, date_to=date_to,
+            ):
+                candidates = self.database.load_query_hits(
+                    run_id, query_id, area_id=area_id, page=page,
+                    date_from=date_from, date_to=date_to,
+                )
+                is_last = self._stored_page_is_last(
+                    run_id, query_id, area_id, page, date_from, date_to,
+                )
+            else:
+                try:
+                    candidates, is_last = search_page(
+                        expression, str(area_id), page=page,
+                        date_from=date_from, date_to=date_to,
+                    )
+                    for rank, candidate in enumerate(candidates):
+                        vacancy_id = str(candidate["id"])
+                        self.database.upsert_vacancy(
+                            vacancy_id, source=candidate.get("_source", "api"),
+                            alternate_url=candidate.get("alternate_url"),
+                        )
+                        self.database.record_query_hit(
+                            run_id, query_id, vacancy_id, area_id=area_id,
+                            page=page, rank=rank, date_from=date_from, date_to=date_to,
+                        )
+                    self.database.record_search_page(
+                        run_id, query_id, page=page, area_id=area_id,
+                        date_from=date_from, date_to=date_to, http_status=200,
+                        result_count=len(candidates), is_last_page=is_last,
+                    )
+                    self.database.resolve_errors(
+                        run_id, "search", query_id=query_id, area_id=area_id,
+                        date_from=date_from, date_to=date_to,
+                    )
+                except Exception as error:
+                    self.database.record_search_page(
+                        run_id, query_id, page=page, area_id=area_id,
+                        date_from=date_from, date_to=date_to,
+                        error_type=type(error).__name__, error_message=str(error),
+                    )
+                    self.database.record_error(
+                        run_id, "search", type(error).__name__, str(error),
+                        query_id=query_id, area_id=area_id,
+                        date_from=date_from, date_to=date_to,
+                    )
+                    return False
+            self._load_candidates(run_id, candidates, detail, query_id, area_id)
+            if is_last:
+                self.database.resolve_errors(
+                    run_id, "coverage", query_id=query_id, area_id=area_id,
+                    date_from=date_from, date_to=date_to,
+                )
+                return False
+        return True
 
     def _load_candidates(
         self, run_id: int, candidates: Iterable[dict[str, Any]],
@@ -232,3 +307,20 @@ class Collector:
                 (run_id, query_id, area_id, date_from or "", date_to or "", page),
             ).fetchone()
         return bool(row["is_last_page"]) if row else False
+
+
+def split_date_window(
+    date_from: str, date_to: str, *, min_window_days: int, overlap_days: int,
+) -> list[tuple[str, str]]:
+    """Bisect inclusive date range with controlled overlap, or return no children."""
+    start = date.fromisoformat(date_from)
+    end = date.fromisoformat(date_to)
+    if end < start:
+        raise ValueError("date_from must not be after date_to")
+    if (end - start).days <= min_window_days:
+        return []
+    midpoint = start + timedelta(days=(end - start).days // 2)
+    right_start = max(start, midpoint - timedelta(days=overlap_days))
+    if right_start <= start:
+        right_start = midpoint
+    return [(start.isoformat(), midpoint.isoformat()), (right_start.isoformat(), end.isoformat())]

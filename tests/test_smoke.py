@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import date
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,7 +17,7 @@ from hh_parser.areas import (
     AreaSelectionError, find_overlaps, flatten_area_tree, parse_area_lines,
     select_catalog_areas, validate_area_ids,
 )
-from hh_parser.collector import Collector
+from hh_parser.collector import Collector, split_date_window
 from hh_parser.cli import build_parser as build_research_parser, run_collect, run_resume
 from hh_parser.sources.api import HHApiSource
 
@@ -314,7 +315,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql"],
         )
         self.assertTrue(
             {
@@ -565,6 +566,50 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(calls, [(0, "2026-01-01", "2026-01-31")])
         self.assertEqual(tuple(page), ("2026-01-01", "2026-01-31"))
+
+    def test_saturated_date_window_splits_until_every_child_fits(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": "split"}, ["1"])
+        calls = []
+
+        def search_page(query, area_id, *, page, date_from=None, date_to=None):
+            calls.append((date_from, date_to, page))
+            fits = (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days <= 1
+            vacancy_id = f"{date_from}-{date_to}"
+            return ([{"id": vacancy_id, "name": "Специалист", "_source": "api"}], fits)
+
+        counters = collector.collect_sliced(
+            run_id, ["1"], ["воинский учет"], search_page=search_page,
+            detail=lambda candidate: {"id": candidate["id"], "name": "Специалист"},
+            max_pages=1, date_from="2026-01-01", date_to="2026-01-05",
+            min_window_days=1, overlap_days=1,
+        )
+        self.assertEqual(counters["errors"], 0)
+        self.assertIn(("2026-01-01", "2026-01-05", 0), calls)
+        self.assertTrue(all((end != "2026-01-05" or start != "2026-01-01") for start, end, _ in calls[1:]))
+        self.assertEqual(
+            split_date_window("2026-01-01", "2026-01-03", min_window_days=1, overlap_days=1),
+            [("2026-01-01", "2026-01-02"), ("2026-01-02", "2026-01-03")],
+        )
+
+    def test_window_error_resolution_does_not_hide_sibling_window(self):
+        run_id = self.database.start_run({"fixture": "window-errors"})
+        query_id = self.database.upsert_query("воинский учет")
+        for date_from, date_to in (("2026-01-01", "2026-01-02"), ("2026-01-02", "2026-01-03")):
+            self.database.record_error(
+                run_id, "coverage", "SearchDepthSaturated", "fixture", query_id=query_id,
+                area_id=1, date_from=date_from, date_to=date_to,
+            )
+        self.database.resolve_errors(
+            run_id, "coverage", query_id=query_id, area_id=1,
+            date_from="2026-01-01", date_to="2026-01-02",
+        )
+        with self.database.connect() as connection:
+            unresolved = connection.execute(
+                "SELECT date_from FROM collection_errors WHERE run_id = ? AND resolved_at IS NULL",
+                (run_id,),
+            ).fetchall()
+        self.assertEqual([row["date_from"] for row in unresolved], ["2026-01-02"])
 
 
 class NormalizationTests(unittest.TestCase):

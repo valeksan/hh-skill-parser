@@ -76,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--max-pages", type=int, default=20)
     collect.add_argument("--date-from", type=parse_iso_date)
     collect.add_argument("--date-to", type=parse_iso_date)
+    collect.add_argument("--date-slice-min-days", type=int, default=1)
+    collect.add_argument("--date-overlap-days", type=int, default=1)
     add_transport_arguments(collect)
 
     resume = commands.add_parser("resume", help="resume one degraded/interrupted SQLite run")
@@ -130,6 +132,8 @@ def run_collect(
     database = Database(settings.database)
     database.migrate()
     validate_date_range(settings.date_from, settings.date_to)
+    if settings.date_slice_min_days < 1 or settings.date_overlap_days < 0:
+        raise ValueError("date slice minimum must be positive; overlap must be non-negative")
     area_ids, catalog_version_id, selection_source = resolve_collect_areas(settings, database)
     queries = load_query_file(settings.queries_file)
     source = source_factory(settings)
@@ -139,17 +143,27 @@ def run_collect(
         "source": settings.source, "request_timeout": settings.request_timeout,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
         "date_from": settings.date_from, "date_to": settings.date_to,
+        "date_slice_min_days": settings.date_slice_min_days,
+        "date_overlap_days": settings.date_overlap_days,
     }
     collector = Collector(database)
     run_id = collector.start(
         config, area_ids, catalog_version_id=catalog_version_id,
         selection_source=selection_source, source_policy=settings.source,
     )
-    counters = collector.collect_paginated(
-        run_id, area_ids, queries, search_page=source.search_page,
-        detail=source.detail, max_pages=settings.max_pages,
-        date_from=settings.date_from, date_to=settings.date_to,
-    )
+    if settings.date_from:
+        counters = collector.collect_sliced(
+            run_id, area_ids, queries, search_page=source.search_page,
+            detail=source.detail, max_pages=settings.max_pages,
+            date_from=settings.date_from, date_to=settings.date_to,
+            min_window_days=settings.date_slice_min_days,
+            overlap_days=settings.date_overlap_days,
+        )
+    else:
+        counters = collector.collect_paginated(
+            run_id, area_ids, queries, search_page=source.search_page,
+            detail=source.detail, max_pages=settings.max_pages,
+        )
     return run_id, counters
 
 
@@ -161,10 +175,19 @@ def run_resume(
     database.migrate()
     config = database.run_config(settings.run_id)
     source = source_factory(settings)
+    if config.get("date_from"):
+        return Collector(database).resume_sliced(
+            settings.run_id, load_query_file(settings.queries_file),
+            search_page=source.search_page, detail=source.detail,
+            max_pages=config.get("max_pages", settings.max_pages),
+            date_from=config["date_from"], date_to=config["date_to"],
+            min_window_days=config.get("date_slice_min_days", 1),
+            overlap_days=config.get("date_overlap_days", 1),
+        )
     return Collector(database).resume_paginated(
         settings.run_id, load_query_file(settings.queries_file),
-        search_page=source.search_page, detail=source.detail, max_pages=settings.max_pages,
-        date_from=config.get("date_from"), date_to=config.get("date_to"),
+        search_page=source.search_page, detail=source.detail,
+        max_pages=config.get("max_pages", settings.max_pages),
     )
 
 

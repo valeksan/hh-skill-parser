@@ -348,21 +348,24 @@ class Database:
         self, run_id: int, stage: str, error_type: str, message: str, *,
         query_id: int | None = None, area_id: int | None = None,
         vacancy_hh_id: str | int | None = None, http_status: int | None = None,
-        attempt: int = 1, connection: sqlite3.Connection | None = None,
+        attempt: int = 1, date_from: str | None = None, date_to: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         """Append auditable collection error."""
         values = (run_id, stage, query_id, area_id,
                   str(vacancy_hh_id) if vacancy_hh_id is not None else None,
-                  error_type, http_status, message, attempt, utc_now())
+                  error_type, http_status, message, attempt, utc_now(), date_from, date_to)
         self._execute(
             "INSERT INTO collection_errors(run_id, stage, query_id, area_id, vacancy_hh_id, error_type, "
-            "http_status, message, attempt, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "http_status, message, attempt, occurred_at, date_from, date_to) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             values, connection,
         )
 
     def resolve_errors(
         self, run_id: int, stage: str, *, query_id: int | None = None,
         area_id: int | None = None, vacancy_hh_id: str | int | None = None,
+        date_from: str | None = None, date_to: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
         """Mark matching retryable failures resolved after successful work."""
@@ -371,6 +374,7 @@ class Database:
         for column, value in (
             ("query_id", query_id), ("area_id", area_id),
             ("vacancy_hh_id", str(vacancy_hh_id) if vacancy_hh_id is not None else None),
+            ("date_from", date_from), ("date_to", date_to),
         ):
             if value is not None:
                 clauses.append(f"{column} = ?")

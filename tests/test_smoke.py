@@ -317,13 +317,14 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql"],
         )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
                 "snapshot_key_skills", "snapshot_roles", "snapshot_industries",
+                "features",
             }.issubset(tables)
         )
 
@@ -393,6 +394,32 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(counters, {"found": 2, "unique": 1, "loaded": 1, "errors": 0})
         self.assertEqual(detail_calls, ["123"])
         self.assertEqual((hit_count, snapshot_count, status), (2, 1, "completed"))
+
+    def test_collector_stores_relevance_and_versioned_features(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": "features"}, ["1"])
+        collector.collect(
+            run_id, ["1"], ["воинский учет"],
+            search=lambda *_: [{"id": "123", "name": "Главный специалист", "_source": "api"}],
+            detail=lambda _: {
+                "id": "123", "name": "Главный специалист",
+                "description": "Воинский учет и бронирование сотрудников",
+                "salary": {"from": 100000, "to": 120000},
+                "work_format": [{"id": "REMOTE", "name": "Удаленно"}],
+            },
+        )
+        with self.database.connect() as connection:
+            label = connection.execute("SELECT label FROM relevance_labels").fetchone()[0]
+            features = {
+                row["name"]: row for row in connection.execute(
+                    "SELECT name, value_text, value_number, value_json FROM features"
+                )
+            }
+        self.assertEqual(label, "relevant")
+        self.assertEqual(features["title.seniority"]["value_text"], "senior")
+        self.assertEqual(features["salary.midpoint"]["value_number"], 110000)
+        self.assertEqual(features["work.remote"]["value_number"], 1)
+        self.assertIn("бронирован", features["topic.reservation"]["value_json"])
 
     def test_collector_resumes_after_card_interruption_without_repeating_search_or_loaded_card(self):
         collector = Collector(self.database)

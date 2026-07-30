@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from .normalization import normalize_api_vacancy
+from .extractors.features import VERSION as FEATURES_VERSION, extract_features
 from .query_specs import QuerySpec
 from relevance import VERSION as RELEVANCE_VERSION, classify_relevance
 from .storage import Database
@@ -93,7 +94,7 @@ class Collector:
                     try:
                         payload = detail(candidate)
                         snapshot = normalize_api_vacancy(payload)
-                        self.database.record_snapshot(run_id, vacancy_id, snapshot)
+                        self._store_snapshot(run_id, vacancy_id, snapshot)
                         self.database.resolve_errors(
                             run_id, "vacancy", vacancy_hh_id=vacancy_id
                         )
@@ -308,11 +309,7 @@ class Collector:
             self.loaded_ids.add(vacancy_id)
             try:
                 snapshot = normalize_api_vacancy(detail(candidate))
-                self.database.record_snapshot(run_id, vacancy_id, snapshot)
-                label, score, reasons = classify_relevance(snapshot["title"], snapshot.get("description_text") or "")
-                self.database.upsert_auto_relevance(
-                    self.database.snapshot_id(vacancy_id, snapshot["content_hash"]), label, score, reasons, RELEVANCE_VERSION,
-                )
+                self._store_snapshot(run_id, vacancy_id, snapshot)
                 self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
             except Exception as error:
                 self.loaded_ids.discard(vacancy_id)
@@ -320,6 +317,14 @@ class Collector:
                     run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                     area_id=area_id, vacancy_hh_id=vacancy_id,
                 )
+
+    def _store_snapshot(self, run_id: int, vacancy_id: str, snapshot: dict[str, Any]) -> None:
+        """Persist snapshot, automatic relevance, and versioned deterministic features."""
+        self.database.record_snapshot(run_id, vacancy_id, snapshot)
+        snapshot_id = self.database.snapshot_id(vacancy_id, snapshot["content_hash"])
+        label, score, reasons = classify_relevance(snapshot["title"], snapshot.get("description_text") or "")
+        self.database.upsert_auto_relevance(snapshot_id, label, score, reasons, RELEVANCE_VERSION)
+        self.database.upsert_features(snapshot_id, extract_features(snapshot), FEATURES_VERSION)
 
     def _stored_page_is_last(
         self, run_id: int, query_id: int, area_id: int, page: int,

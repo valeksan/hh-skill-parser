@@ -346,6 +346,19 @@ class Database:
             if cursor.rowcount != 1:
                 raise ValueError(f"snapshot {snapshot_id} has no auto relevance label")
 
+    def upsert_features(self, snapshot_id: int, features: list[dict[str, Any]], version: str) -> None:
+        """Replace one extractor version's values without affecting other versions."""
+        with self.transaction() as tx:
+            tx.execute("DELETE FROM features WHERE snapshot_id = ? AND extractor_version = ?", (snapshot_id, version))
+            for feature in features:
+                tx.execute(
+                    "INSERT INTO features(snapshot_id, name, value_type, value_text, value_number, value_json, extractor_version, calculated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (snapshot_id, feature["name"], feature["value_type"], feature.get("value_text"),
+                     feature.get("value_number"), json_value(feature["value_json"]) if "value_json" in feature else None,
+                     version, utc_now()),
+                )
+
     @staticmethod
     def _store_snapshot_links(
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],

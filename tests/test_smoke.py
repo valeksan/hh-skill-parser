@@ -1,4 +1,5 @@
 import csv
+import gzip
 import os
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from unittest import mock
 import parse_skills
 import start
 from hh_parser.storage import Database
+from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -345,6 +347,37 @@ class DatabaseTests(unittest.TestCase):
             count = connection.execute("SELECT COUNT(*) FROM vacancies WHERE hh_id = 'rollback'").fetchone()[0]
 
         self.assertEqual(count, 0)
+
+
+class NormalizationTests(unittest.TestCase):
+    def test_api_normalization_redacts_contacts_and_exact_location_before_compression(self):
+        snapshot = normalize_api_vacancy({
+            "id": "1", "name": "Специалист", "description": "Пишите user@example.com или +7 (999) 123-45-67",
+            "contacts": {"email": "user@example.com", "phones": [{"number": "+79991234567"}]},
+            "address": {"street": "Ленина", "lat": 55.75, "lng": 37.62, "metro": {"name": "Охотный ряд"}},
+            "employer": {"id": "42", "name": "АО Пример"}, "area": {"id": "1", "name": "Москва"},
+            "salary": {"from": 100000, "to": None, "currency": "RUR", "gross": False},
+        }, observed_at="2026-01-01T00:00:00+00:00")
+
+        raw = gzip.decompress(snapshot["raw_payload"]).decode("utf-8")
+        self.assertNotIn("user@example.com", raw)
+        self.assertNotIn("123-45-67", raw)
+        self.assertNotIn("Ленина", raw)
+        self.assertIn("[redacted-email]", snapshot["description_text"])
+        self.assertEqual(snapshot["employer_id"], "42")
+        self.assertEqual(snapshot["area_name"], "Москва")
+        self.assertTrue(snapshot["redaction_applied"])
+
+    def test_html_normalization_keeps_compressed_redacted_html(self):
+        snapshot = normalize_html_vacancy(
+            {"id": "1", "name": "Специалист", "description": "<p>mail@example.com</p>"},
+            "<html><body><p>mail@example.com</p></body></html>",
+        )
+
+        raw_html = gzip.decompress(snapshot["raw_payload"]).decode("utf-8")
+        self.assertEqual(snapshot["raw_content_type"], "text/html")
+        self.assertNotIn("mail@example.com", raw_html)
+        self.assertIn("[redacted-email]", raw_html)
 
 
 if __name__ == "__main__":

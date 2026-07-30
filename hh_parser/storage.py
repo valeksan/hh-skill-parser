@@ -398,6 +398,83 @@ class Database:
                     (snapshot_id, skill_ids[canonical], source, alias, count, json_value([alias]), version),
                 )
 
+    def selected_snapshots(
+        self, *, snapshot_scope: str = "latest", run_ids: list[int] | None = None,
+        area_ids: list[str] | None = None, source: str | None = None,
+        date_from: str | None = None, date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Load sanitized snapshots for offline extraction; never contacts HH."""
+        if snapshot_scope not in {"latest", "all"}:
+            raise ValueError("snapshot_scope must be 'latest' or 'all'")
+        clauses: list[str] = []
+        values: list[Any] = []
+        joins = ""
+        if run_ids:
+            placeholders = ", ".join("?" for _ in run_ids)
+            joins += " JOIN vacancy_snapshot_observations o ON o.snapshot_id = s.id"
+            clauses.append(f"o.run_id IN ({placeholders})")
+            values.extend(run_ids)
+        if area_ids:
+            placeholders = ", ".join("?" for _ in area_ids)
+            clauses.append(f"CAST(s.area_id AS TEXT) IN ({placeholders})")
+            values.extend(area_ids)
+        if source:
+            clauses.append("s.source = ?")
+            values.append(source)
+        if date_from:
+            clauses.append("substr(s.published_at, 1, 10) >= ?")
+            values.append(date_from)
+        if date_to:
+            clauses.append("substr(s.published_at, 1, 10) <= ?")
+            values.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        scope = ""
+        if snapshot_scope == "latest":
+            scope = (
+                " JOIN (SELECT vacancy_hh_id, MAX(last_seen_at) AS latest_seen "
+                "FROM vacancy_snapshots GROUP BY vacancy_hh_id) newest "
+                "ON newest.vacancy_hh_id = s.vacancy_hh_id AND newest.latest_seen = s.last_seen_at"
+            )
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT s.* FROM vacancy_snapshots s" + scope + joins + " " + where + " ORDER BY s.id",
+                values,
+            ).fetchall()
+        snapshots: list[dict[str, Any]] = []
+        for row in rows:
+            snapshot = dict(row)
+            for name in ("work_format", "roles", "industries", "key_skills", "languages", "completeness"):
+                snapshot[name if name != "work_format" else "work_formats"] = json.loads(snapshot.pop(f"{name}_json"))
+            snapshots.append(snapshot)
+        return snapshots
+
+    def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
+        """Create durable run metadata for a local, rebuildable extractor."""
+        if kind not in {"relevance", "features", "skills"}:
+            raise ValueError(f"invalid extraction kind: {kind}")
+        config_json = json_value(config)
+        with self.transaction() as tx:
+            return int(tx.execute(
+                "INSERT INTO extraction_runs(kind, status, extractor_version, config_json, config_hash, started_at, selected_count) "
+                "VALUES (?, 'running', ?, ?, ?, ?, ?)",
+                (kind, version, config_json, hashlib.sha256(config_json.encode("utf-8")).hexdigest(), utc_now(), selected_count),
+            ).lastrowid)
+
+    def finish_extraction_run(self, extraction_run_id: int, processed_count: int, error_count: int) -> None:
+        """Close extractor run after every selected snapshot was attempted."""
+        with self.transaction() as tx:
+            tx.execute(
+                "UPDATE extraction_runs SET status = ?, finished_at = ?, processed_count = ?, error_count = ? WHERE id = ?",
+                ("completed" if not error_count else "degraded", utc_now(), processed_count, error_count, extraction_run_id),
+            )
+
+    def record_extraction_error(self, extraction_run_id: int, snapshot_id: int | None, error: Exception) -> None:
+        with self.transaction() as tx:
+            tx.execute(
+                "INSERT INTO extraction_errors(extraction_run_id, snapshot_id, error_type, message, occurred_at) VALUES (?, ?, ?, ?, ?)",
+                (extraction_run_id, snapshot_id, type(error).__name__, str(error), utc_now()),
+            )
+
     @staticmethod
     def _store_snapshot_links(
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],

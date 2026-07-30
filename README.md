@@ -30,10 +30,18 @@ hh-skill-parser collect --area 1 --area 2 --area 13 --area 7
 
 # Продолжение того же run после сбоя.
 hh-skill-parser resume --run-id RUN_ID
+
+# Производные данные строятся отдельно, только из SQLite, без запросов к HH.
+hh-skill-parser extract relevance
+hh-skill-parser extract features --snapshot all
+hh-skill-parser extract --skills-file skills_whitelist.txt skills
 ```
 
 Run ID и счётчики печатаются в JSON. Область, страницы, hits, snapshots и ошибки
 сохраняются в SQLite; повторный запуск не требует удаления progress-файлов.
+`extract` по умолчанию обрабатывает latest snapshot каждой вакансии. Фильтры
+`--run-id`, `--area`, `--source`, `--date-from/--date-to` ограничивают выборку.
+Автоматические labels/features/skills не выполняются при `collect`/`resume`.
 
 ## Команды `parse_skills.py`
 

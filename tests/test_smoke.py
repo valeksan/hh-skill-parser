@@ -19,10 +19,11 @@ from hh_parser.areas import (
     select_catalog_areas, validate_area_ids,
 )
 from hh_parser.collector import Collector, split_date_window
+from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_import_labeling,
+    run_import_labeling, run_extract,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -318,7 +319,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql"],
         )
         self.assertTrue(
             {
@@ -327,6 +328,7 @@ class DatabaseTests(unittest.TestCase):
                 "snapshot_key_skills", "snapshot_roles", "snapshot_industries",
                 "features",
                 "skills", "skill_aliases", "vacancy_skills",
+                "extraction_runs", "extraction_errors",
             }.issubset(tables)
         )
 
@@ -397,7 +399,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(detail_calls, ["123"])
         self.assertEqual((hit_count, snapshot_count, status), (2, 1, "completed"))
 
-    def test_collector_stores_relevance_and_versioned_features(self):
+    def test_offline_extraction_stores_relevance_and_versioned_features(self):
         collector = Collector(self.database)
         run_id = collector.start({"fixture": "features"}, ["1"])
         collector.collect(
@@ -410,6 +412,14 @@ class DatabaseTests(unittest.TestCase):
                 "work_format": [{"id": "REMOTE", "name": "Удаленно"}],
             },
         )
+        counters_before = self.database.run_counters(run_id)
+        result = run_offline_extraction(self.database, "relevance")
+        self.assertEqual(result["processed"], 1)
+        repeated = run_offline_extraction(self.database, "relevance")
+        self.assertEqual(repeated["processed"], 1)
+        self.assertEqual(self.database.run_counters(run_id), counters_before)
+        result = run_offline_extraction(self.database, "features")
+        self.assertEqual(result["processed"], 1)
         with self.database.connect() as connection:
             label = connection.execute("SELECT label FROM relevance_labels").fetchone()[0]
             features = {
@@ -423,10 +433,10 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["work.remote"]["value_number"], 1)
         self.assertIn("бронирован", features["topic.reservation"]["value_json"])
 
-    def test_collector_stores_versioned_skill_evidence(self):
+    def test_offline_skill_extraction_stores_versioned_evidence(self):
         skills_path = Path(self.temp_dir.name) / "skills.txt"
         skills_path.write_text("воинский учет | военный учет\nбронирование\n", encoding="utf-8")
-        collector = Collector(self.database, skill_dictionary=load_skill_dictionary(skills_path))
+        collector = Collector(self.database)
         run_id = collector.start({"fixture": "skills"}, ["1"])
         collector.collect(
             run_id, ["1"], ["воинский учет"],
@@ -436,6 +446,10 @@ class DatabaseTests(unittest.TestCase):
                 "key_skills": [{"name": "Бронирование"}],
             },
         )
+        result = run_offline_extraction(
+            self.database, "skills", skill_dictionary=load_skill_dictionary(skills_path),
+        )
+        self.assertEqual(result["processed"], 1)
         with self.database.connect() as connection:
             rows = connection.execute(
                 "SELECT s.canonical_name, v.source, v.matched_alias, v.match_count "
@@ -450,6 +464,20 @@ class DatabaseTests(unittest.TestCase):
                 ("воинский учет", "title", "военный учет", 1),
             ],
         )
+
+    def test_extract_cli_defaults_to_latest_snapshot_without_transport(self):
+        run_id = self.database.start_run({"fixture": "extract-cli"})
+        self.database.upsert_vacancy("123", source="api")
+        self.database.record_snapshot(run_id, "123", {
+            "content_hash": "extract-cli", "title": "Воинский учет", "source": "api",
+        })
+        settings = build_research_parser().parse_args([
+            "extract", "--database", str(self.database.path), "relevance",
+        ])
+        result = run_extract(settings)
+        self.assertEqual(result, {"run_id": 1, "selected": 1, "processed": 1, "errors": 0})
+        with self.database.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM relevance_labels").fetchone()[0], 1)
 
     def test_collector_resumes_after_card_interruption_without_repeating_search_or_loaded_card(self):
         collector = Collector(self.database)

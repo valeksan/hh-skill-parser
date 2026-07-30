@@ -24,6 +24,8 @@ SKILL_FIELDS = (
     "skill", "topic_family", "dictionary_version", "source", "matched_alias",
     "match_count", "extractor_version",
 )
+ROLE_FIELDS = ("snapshot_id", "hh_id", "title", "role_id", "role_name")
+QUERY_HIT_FIELDS = ("run_id", "query_id", "query_group", "query_expression", "area_id", "date_from", "date_to", "hh_id", "page", "rank", "observed_at")
 
 
 def export_vacancies(
@@ -98,6 +100,35 @@ def export_skills(database: Database, path: str | Path) -> int:
         ).fetchall()
     with Path(path).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=SKILL_FIELDS)
+        writer.writeheader()
+        writer.writerows(dict(row) for row in rows)
+    return len(rows)
+
+
+def export_roles(database: Database, path: str | Path) -> int:
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT s.id AS snapshot_id, s.vacancy_hh_id AS hh_id, s.title, r.role_id, r.role_name "
+            "FROM latest_vacancy_snapshots s JOIN snapshot_roles r ON r.snapshot_id = s.id "
+            "ORDER BY s.id, r.role_name"
+        ).fetchall()
+    return _write_csv(rows, ROLE_FIELDS, path)
+
+
+def export_query_hits(database: Database, path: str | Path) -> int:
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT h.run_id, h.query_id, q.query_group, q.expression AS query_expression, h.area_id, "
+            "h.date_from, h.date_to, h.vacancy_hh_id AS hh_id, h.page, h.rank, h.observed_at "
+            "FROM vacancy_query_hits h JOIN search_queries q ON q.id = h.query_id "
+            "ORDER BY h.run_id, h.query_id, h.area_id, h.page, h.rank, h.vacancy_hh_id"
+        ).fetchall()
+    return _write_csv(rows, QUERY_HIT_FIELDS, path)
+
+
+def _write_csv(rows: list[Any], fields: tuple[str, ...], path: str | Path) -> int:
+    with Path(path).open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(dict(row) for row in rows)
     return len(rows)

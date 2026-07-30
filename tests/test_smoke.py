@@ -21,7 +21,7 @@ from hh_parser.areas import (
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features, repost_fingerprint
-from hh_parser.export import export_skills, export_vacancies
+from hh_parser.export import export_query_hits, export_roles, export_skills, export_vacancies
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
@@ -556,6 +556,20 @@ class DatabaseTests(unittest.TestCase):
             "export", "--database", str(self.database.path), "skills", "--output", str(output),
         ])
         self.assertEqual(run_export_skills(settings), 2)
+
+    def test_role_and_query_hit_exports_are_db_only(self):
+        run_id = self.database.start_run({"fixture": "relations"})
+        query_id = self.database.upsert_query("воинский учет", query_group="military")
+        self.database.upsert_vacancy("relation-1", source="api")
+        self.database.record_query_hit(run_id, query_id, "relation-1", area_id=1, page=0, rank=0)
+        self.database.record_snapshot(run_id, "relation-1", {
+            "content_hash": "relation-hash", "title": "Специалист", "source": "api",
+            "roles": [{"id": "1", "name": "Специалист"}],
+        })
+        roles = Path(self.temp_dir.name) / "roles.csv"
+        hits = Path(self.temp_dir.name) / "hits.csv"
+        self.assertEqual(export_roles(self.database, roles), 1)
+        self.assertEqual(export_query_hits(self.database, hits), 1)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

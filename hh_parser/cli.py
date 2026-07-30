@@ -19,7 +19,7 @@ from .areas import (
 from .collector import Collector
 from .discovery import discover_skill_candidates, export_skill_candidates, import_skill_candidates
 from .extractors.offline import extract as run_extraction
-from .export import export_skills, export_vacancies
+from .export import export_query_hits, export_roles, export_skills, export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
 from .query_specs import load_query_specs
@@ -137,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
     vacancies_export.add_argument("--date-to", type=parse_iso_date)
     skills_export = export_commands.add_parser("skills", help="export normalized vacancy-skill CSV")
     skills_export.add_argument("--output", required=True)
+    roles_export = export_commands.add_parser("roles", help="export normalized vacancy-role CSV")
+    roles_export.add_argument("--output", required=True)
+    query_hits_export = export_commands.add_parser("query-hits", help="export normalized query-hit CSV")
+    query_hits_export.add_argument("--output", required=True)
 
     stats = commands.add_parser("stats", help="calculate DB-only vacancy statistics")
     stats.add_argument("--config")
@@ -342,6 +346,12 @@ def run_export_skills(settings: argparse.Namespace) -> int:
     return export_skills(database, settings.output)
 
 
+def run_export_relation(settings: argparse.Namespace) -> int:
+    database = Database(settings.database)
+    database.migrate()
+    return export_roles(database, settings.output) if settings.export_command == "roles" else export_query_hits(database, settings.output)
+
+
 def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
     """Calculate filtered counts from SQLite only."""
     validate_date_range(settings.date_from, settings.date_to)
@@ -483,8 +493,10 @@ def main(argv: list[str] | None = None) -> None:
                 rows = run_export_labeling(settings)
             elif settings.export_command == "vacancies":
                 rows = run_export_vacancies(settings)
-            else:
+            elif settings.export_command == "skills":
                 rows = run_export_skills(settings)
+            else:
+                rows = run_export_relation(settings)
             print(json.dumps({"rows": rows}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "areas":
             if settings.areas_command == "sync":

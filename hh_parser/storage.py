@@ -95,6 +95,34 @@ class Database:
             self._backfill_repost_keys(connection)
 
     @staticmethod
+    def _migration_names() -> list[str]:
+        return [item.name for item in sorted(Path(__file__).with_name("migrations").glob("*.sql"))]
+
+    def require_compatible_schema(self) -> None:
+        """Fail clearly when DB is not exactly compatible with packaged schema."""
+        if not self.path.exists():
+            raise ValueError(f"database schema is unavailable: {self.path}; run 'hh-skill-parser db migrate'")
+        with sqlite3.connect(self.path) as connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+            ).fetchone()
+            if table is None:
+                raise ValueError("database schema is incompatible: schema_migrations is missing; run 'hh-skill-parser db migrate'")
+            applied = {str(row[0]) for row in connection.execute("SELECT version FROM schema_migrations")}
+        expected = set(self._migration_names())
+        missing, unknown = sorted(expected - applied), sorted(applied - expected)
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append(f"missing migrations: {', '.join(missing)}")
+            if unknown:
+                details.append(f"unknown migrations: {', '.join(unknown)}")
+            raise ValueError(
+                "database schema is incompatible (" + "; ".join(details)
+                + "); use matching application version or run 'hh-skill-parser db migrate'"
+            )
+
+    @staticmethod
     def _store_repost_key(connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any]) -> None:
         """Persist relation from one publication revision to its repost key."""
         from .history import REPOST_KEY_VERSION, repost_key
@@ -692,6 +720,50 @@ class Database:
         with self.connect() as connection:
             row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         return {"busy": int(row[0]), "log_frames": int(row[1]), "checkpointed_frames": int(row[2])}
+
+    def backup_to(self, output: str | Path) -> dict[str, int]:
+        """Create verified SQLite backup after a WAL checkpoint."""
+        target = Path(output)
+        if target.resolve() == self.path.resolve():
+            raise ValueError("backup output must differ from source database")
+        if target.exists():
+            raise ValueError(f"backup output already exists: {target}")
+        checkpoint = self.checkpoint()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as source, sqlite3.connect(target) as destination:
+            source.backup(destination)
+        restored = Database(target, busy_timeout_ms=self.busy_timeout_ms, wal=False)
+        restored.require_compatible_schema()
+        result = restored.integrity_check()
+        if result != ["ok"]:
+            target.unlink(missing_ok=True)
+            raise ValueError(f"backup integrity check failed: {result}")
+        return {"bytes": target.stat().st_size, **checkpoint}
+
+    @classmethod
+    def restore_to(cls, source_path: str | Path, output: str | Path, *, overwrite: bool = False) -> dict[str, int]:
+        """Copy a verified backup to separate DB; never overwrite by default."""
+        source = Path(source_path)
+        target = Path(output)
+        if not source.is_file():
+            raise ValueError(f"backup file does not exist: {source}")
+        if source.resolve() == target.resolve():
+            raise ValueError("restore output must differ from backup input")
+        if target.exists() and not overwrite:
+            raise ValueError(f"restore output already exists: {target}; pass --overwrite to replace it")
+        cls(source, wal=False).require_compatible_schema()
+        source_result = cls(source, wal=False).integrity_check()
+        if source_result != ["ok"]:
+            raise ValueError(f"backup integrity check failed: {source_result}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(source) as from_connection, sqlite3.connect(target) as to_connection:
+            from_connection.backup(to_connection)
+        restored = cls(target, wal=False)
+        restored.require_compatible_schema()
+        result = restored.integrity_check()
+        if result != ["ok"]:
+            raise ValueError(f"restored database integrity check failed: {result}")
+        return {"bytes": target.stat().st_size}
 
     def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
         """Create durable run metadata for a local, rebuildable extractor."""

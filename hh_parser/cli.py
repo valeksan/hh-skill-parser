@@ -330,8 +330,26 @@ def build_parser() -> argparse.ArgumentParser:
     db_commands.add_parser("migrate", help="apply packaged SQLite migrations")
     db_commands.add_parser("check", help="run SQLite integrity check")
     db_commands.add_parser("checkpoint", help="checkpoint SQLite WAL without deleting data")
+    backup = db_commands.add_parser("backup", help="checkpoint WAL and create verified SQLite backup")
+    backup.add_argument("--output", required=True, help="new backup SQLite path; must not exist")
+    restore = db_commands.add_parser("restore", help="restore verified backup into separate SQLite file")
+    restore.add_argument("--input", required=True, help="existing backup SQLite path")
+    restore.add_argument("--output", required=True, help="restored SQLite path")
+    restore.add_argument("--overwrite", action="store_true", help="replace existing restore output")
     reset = db_commands.add_parser("reset", help="preview or clear all collected/derived data")
     reset.add_argument("--yes", action="store_true", help="permanently clear data; default is preview")
+
+    smoke = commands.add_parser("smoke", help="explicit opt-in HH API connectivity smoke")
+    smoke_commands = smoke.add_subparsers(dest="smoke_command", required=True)
+    live_smoke = smoke_commands.add_parser("live", help="one small HH API search; never writes SQLite")
+    live_smoke.add_argument("--confirm-live", action="store_true", help="required: permit one real HH API request")
+    live_smoke.add_argument("--query", default="воинский учет")
+    live_smoke.add_argument("--area", default="1")
+    live_smoke.add_argument("--request-timeout", type=float, default=5.0)
+    live_smoke.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
+    live_smoke.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
+    live_smoke.add_argument("--host", default="hh.ru")
+    live_smoke.add_argument("--locale", default="RU")
 
     discover = commands.add_parser("discover", help="mine skill candidates from stored corpus")
     add_database_arguments(discover)
@@ -430,6 +448,7 @@ def run_collect(
     """Start finite DB-backed collection and return run ID with durable counters."""
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     if settings.date_slice_min_days < 1 or settings.date_overlap_days < 0:
         raise ValueError("date slice minimum must be positive; overlap must be non-negative")
     area_ids, catalog_version_id, selection_source = resolve_collect_areas(settings, database)
@@ -481,6 +500,7 @@ def run_resume(
     """Resume DB work without rediscovering areas or losing previous pages/cards."""
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     config = database.run_config(settings.run_id)
     source_options = {
         **vars(settings), "host": config.get("host", settings.host),
@@ -532,6 +552,7 @@ def run_export_labeling(settings: argparse.Namespace) -> int:
     """Write all auto-labeled snapshots as reviewable CSV."""
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     return export_labeling(
         database, settings.output, sample_size=settings.sample_size, sample_seed=settings.sample_seed,
     )
@@ -556,6 +577,7 @@ def run_export_vacancies(settings: argparse.Namespace) -> int:
     validate_date_range(settings.date_from, settings.date_to)
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     return export_vacancies(
         database, settings.output, snapshot_scope=settings.snapshot,
         run_ids=settings.run_id or None, area_ids=settings.area or None,
@@ -567,12 +589,14 @@ def run_export_vacancies(settings: argparse.Namespace) -> int:
 def run_export_skills(settings: argparse.Namespace) -> int:
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     return export_skills(database, settings.output)
 
 
 def run_export_relation(settings: argparse.Namespace) -> int:
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     return export_roles(database, settings.output) if settings.export_command == "roles" else export_query_hits(database, settings.output)
 
 
@@ -580,6 +604,7 @@ def run_export_marts(settings: argparse.Namespace) -> dict[str, Any]:
     validate_date_range(settings.date_from, settings.date_to)
     database = database_for(settings)
     database.migrate()
+    database.require_compatible_schema()
     return export_marts(
         database, settings.output_dir, snapshot_scope=settings.snapshot, run_ids=settings.run_id or None,
         area_ids=settings.area or None, relevance=settings.relevance, query_family=settings.query_family,
@@ -618,6 +643,9 @@ def run_maintenance(settings: argparse.Namespace) -> dict[str, Any]:
 
 def run_db(settings: argparse.Namespace) -> dict[str, Any]:
     """Run schema migration or explicit full data reset."""
+    if settings.db_command == "restore":
+        return {"input": str(settings.input), "output": str(settings.output), "verified": True,
+                **Database.restore_to(settings.input, settings.output, overwrite=settings.overwrite)}
     database = database_for(settings)
     database.migrate()
     if settings.db_command == "migrate":
@@ -627,10 +655,32 @@ def run_db(settings: argparse.Namespace) -> dict[str, Any]:
         return {"ok": result == ["ok"], "result": result}
     if settings.db_command == "checkpoint":
         return database.checkpoint()
+    if settings.db_command == "backup":
+        return {"output": str(settings.output), "verified": True, **database.backup_to(settings.output)}
     summary = database.reset_data_summary()
     if not settings.yes:
         return {"dry_run": True, "tables": summary}
     return {"dry_run": False, "tables": database.reset_data()}
+
+
+def run_live_smoke(
+    settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source,
+) -> dict[str, Any]:
+    """Run exactly one bounded real API search, without DB writes or secret output."""
+    if not settings.confirm_live:
+        raise ValueError("live smoke requires --confirm-live")
+    if not 0 < settings.request_timeout <= 10:
+        raise ValueError("live smoke --request-timeout must be > 0 and <= 10 seconds")
+    source_settings = argparse.Namespace(**{
+        **vars(settings), "source": "api", "max_retries": 0, "retry_backoff": 0.0,
+    })
+    try:
+        items, is_last_page = source_factory(source_settings).search_page(
+            settings.query, settings.area, page=0, per_page=1,
+        )
+    except (requests.RequestException, ValueError) as error:
+        return {"status": "degraded", "partial": True, "error_type": type(error).__name__}
+    return {"status": "completed", "partial": False, "items": len(items), "is_last_page": is_last_page}
 
 
 def run_discover(settings: argparse.Namespace) -> int:
@@ -774,6 +824,8 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(run_maintenance(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "db":
             print(json.dumps(run_db(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "smoke":
+            print(json.dumps(run_live_smoke(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "discover":
             print(json.dumps({"rows": run_discover(settings)}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "import":

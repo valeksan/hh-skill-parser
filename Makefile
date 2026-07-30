@@ -7,7 +7,7 @@ BINARY_NAME ?= hh-skill-parser
 .PHONY: help \
 	install install-full install-chart install-cli install-bundle \
 	run run-html run-lite run-key-skills \
-	collect resume areas-sync db-check db-checkpoint \
+	collect resume areas-sync db-check db-checkpoint db-backup db-restore \
 	smoke \
 	bundle \
 	clean
@@ -67,6 +67,12 @@ db-check: ## Run SQLite integrity check (pass DATABASE=path)
 
 db-checkpoint: ## Checkpoint SQLite WAL (pass DATABASE=path)
 	$(PYTHON) -m hh_parser.cli db --database $(or $(DATABASE),hh_mobilization.sqlite3) checkpoint
+
+db-backup: ## Create verified backup (pass DATABASE=path BACKUP=path)
+	$(PYTHON) -m hh_parser.cli db --database $(or $(DATABASE),hh_mobilization.sqlite3) backup --output $(BACKUP)
+
+db-restore: ## Restore backup separately (pass BACKUP=path RESTORE=path)
+	$(PYTHON) -m hh_parser.cli db restore --input $(BACKUP) --output $(RESTORE)
 
 smoke: ## Run local smoke tests
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v

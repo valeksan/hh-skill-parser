@@ -54,7 +54,7 @@ git history.
 3. **P2 — готовность к регулярным запускам**
    - [x] [REL-1](da_mobilization_release_plan.md#rel-1):
      закрыть сквозные/golden сценарии.
-   - [ ] [REL-2](da_mobilization_release_plan.md#rel-2):
+   - [x] [REL-2](da_mobilization_release_plan.md#rel-2):
      добавить backup/restore и контролируемый live smoke.
    - [ ] [REL-3](da_mobilization_release_plan.md#rel-3):
      синхронизировать документацию с финальным workflow.

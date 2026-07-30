@@ -16,7 +16,7 @@ pip install -e .
 Для быстрой локальной проверки:
 
 ```bash
-python -m unittest tests.test_smoke
+python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ## Запуск
@@ -78,6 +78,14 @@ watermark.
 только по сохранённому batch и manual labels. `unknown`/blank не входят в binary metrics.
 HTML anti-bot/interstitial страница сохраняется как ошибка run, не как вакансия.
 
+Регулярный запуск: incremental ежедневно/по расписанию внешним scheduler; full —
+отдельно, периодически, с явным historical range. Встроенного scheduler нет:
+
+```bash
+hh-skill-parser collect --area 1 --area 2 --date-from 2026-01-01
+hh-skill-parser collect --collection-mode full --area 1 --date-from 2026-01-01 --date-to 2026-06-30
+```
+
 ## Конфигурация DB-backed CLI
 
 Скопируйте `config.example.toml` в `config.toml`. Реальный token в example не
@@ -123,6 +131,37 @@ hh-skill-parser maintenance --database hh_mobilization.sqlite3 purge-raw --befor
 ```bash
 hh-skill-parser maintenance --database hh_mobilization.sqlite3 inspect-raw \
   --snapshot-id 42 --output snapshot-42.raw
+```
+
+Рост raw оценивается до purge через preview (`raw_bytes`) или локально:
+
+```bash
+sqlite3 hh_mobilization.sqlite3 'SELECT COUNT(*), COALESCE(SUM(raw_size), 0) FROM vacancy_snapshots WHERE raw_payload IS NOT NULL;'
+```
+
+## Backup и recovery
+
+Backup делает WAL checkpoint, SQLite-consistent copy и `integrity_check`. Backup
+и restore не перезаписывают файл по умолчанию. Restore всегда идёт в отдельный
+путь и проверяется до/после копирования:
+
+```bash
+hh-skill-parser db --database hh_mobilization.sqlite3 backup --output backups/hh-2026-07-30.sqlite3
+hh-skill-parser db restore --input backups/hh-2026-07-30.sqlite3 --output restored/hh.sqlite3
+hh-skill-parser db --database restored/hh.sqlite3 check
+```
+
+`--overwrite` у `db restore` заменяет уже существующий restore output; исходный
+backup не меняется.
+
+## Live smoke
+
+Обычный test suite не вызывает HH. Только явный opt-in smoke делает один API
+search (`per_page=1`), timeout максимум 10 секунд, retries выключены, SQLite не
+меняется. JSON содержит `completed` либо `degraded/partial`, без token:
+
+```bash
+hh-skill-parser smoke live --confirm-live --area 1 --request-timeout 5
 ```
 
 ## Полный новый скан

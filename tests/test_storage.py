@@ -31,7 +31,7 @@ from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_coverage, run_resume, run_retry, resolve_collection_window,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats,
+    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats, run_live_smoke,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -310,6 +310,47 @@ class DatabaseTests(unittest.TestCase):
         result = run_db(settings)
         self.assertEqual(result["busy"], 0)
         self.assertIn("log_frames", result)
+
+    def test_db_backup_restores_separate_verified_copy(self):
+        run_id = self.database.start_run({"fixture": "backup"})
+        backup = Path(self.temp_dir.name) / "backup.sqlite3"
+        restored = Path(self.temp_dir.name) / "restored.sqlite3"
+        parser = build_research_parser()
+        result = run_db(parser.parse_args([
+            "db", "--database", str(self.database.path), "backup", "--output", str(backup),
+        ]))
+        self.assertTrue(result["verified"])
+        self.assertTrue(backup.exists())
+        restore = run_db(parser.parse_args([
+            "db", "restore", "--input", str(backup), "--output", str(restored),
+        ]))
+        self.assertTrue(restore["verified"])
+        self.assertEqual(Database(restored).run_counters(run_id), {"found": 0, "unique": 0, "loaded": 0, "errors": 0})
+        self.assertEqual(run_db(parser.parse_args(["db", "--database", str(restored), "check"])), {"ok": True, "result": ["ok"]})
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            run_db(parser.parse_args(["db", "restore", "--input", str(backup), "--output", str(restored)]))
+
+    def test_schema_gate_has_actionable_error(self):
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM schema_migrations WHERE version = '0021_skill_discovery_reviews.sql'")
+        with self.assertRaisesRegex(ValueError, "run 'hh-skill-parser db migrate'"):
+            self.database.require_compatible_schema()
+
+    def test_live_smoke_is_opt_in_bounded_and_reports_degraded_without_secret(self):
+        parser = build_research_parser()
+        settings = parser.parse_args(["smoke", "live", "--confirm-live", "--access-token", "secret-value"])
+
+        class Source:
+            def search_page(self, *_args, **_kwargs):
+                return ([{"id": "1"}], True)
+
+        self.assertEqual(run_live_smoke(settings, source_factory=lambda _: Source()), {
+            "status": "completed", "partial": False, "items": 1, "is_last_page": True,
+        })
+        with self.assertRaisesRegex(ValueError, "--confirm-live"):
+            run_live_smoke(parser.parse_args(["smoke", "live"]), source_factory=lambda _: Source())
+        failed = run_live_smoke(settings, source_factory=lambda _: (_ for _ in ()).throw(requests.Timeout()))
+        self.assertEqual(failed, {"status": "degraded", "partial": True, "error_type": "Timeout"})
 
     def test_skill_discovery_is_local_deterministic_and_excludes_known_aliases(self):
         run_id = self.database.start_run({"fixture": "discovery"})

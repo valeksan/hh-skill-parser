@@ -16,6 +16,7 @@ from hh_parser.areas import (
     AreaSelectionError, find_overlaps, flatten_area_tree, parse_area_lines,
     select_catalog_areas, validate_area_ids,
 )
+from hh_parser.collector import Collector
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -364,6 +365,28 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(loaded_id, catalog_id)
         self.assertEqual(select_catalog_areas(catalog, "113", "leaf"), ["1"])
+
+    def test_collector_records_hits_before_global_card_deduplication(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": True}, ["1"])
+        detail_calls = []
+
+        def search(query, area_id):
+            return [{"id": "123", "name": "Специалист", "alternate_url": "https://hh.ru/vacancy/123"}]
+
+        def detail(candidate):
+            detail_calls.append(candidate["id"])
+            return {"id": candidate["id"], "name": "Специалист", "description": "<p>Текст</p>"}
+
+        counters = collector.collect(run_id, ["1"], ["воинский учет", "ГО и ЧС"], search=search, detail=detail)
+        with self.database.connect() as connection:
+            hit_count = connection.execute("SELECT COUNT(*) FROM vacancy_query_hits").fetchone()[0]
+            snapshot_count = connection.execute("SELECT COUNT(*) FROM vacancy_snapshots").fetchone()[0]
+            status = connection.execute("SELECT status FROM collection_runs WHERE id = ?", (run_id,)).fetchone()[0]
+
+        self.assertEqual(counters, {"found": 2, "unique": 1, "loaded": 1, "errors": 0})
+        self.assertEqual(detail_calls, ["123"])
+        self.assertEqual((hit_count, snapshot_count, status), (2, 1, "completed"))
 
 
 class NormalizationTests(unittest.TestCase):

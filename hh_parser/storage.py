@@ -331,6 +331,24 @@ class Database:
             for row in rows
         }
 
+    def set_run_areas(
+        self, run_id: int, area_ids: list[str], *, catalog_version_id: int | None,
+        selection_source: str, connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Freeze selected work areas for deterministic resume."""
+        def store(tx: sqlite3.Connection) -> None:
+            for area_id in area_ids:
+                tx.execute(
+                    "INSERT INTO run_areas(run_id, area_hh_id, catalog_version_id, selection_source) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(run_id, area_hh_id) DO NOTHING",
+                    (run_id, str(area_id), catalog_version_id, selection_source),
+                )
+        if connection is not None:
+            store(connection)
+            return
+        with self.transaction() as tx:
+            store(tx)
+
     def _execute(self, sql: str, values: tuple[Any, ...], connection: sqlite3.Connection | None) -> None:
         if connection is not None:
             connection.execute(sql, values)

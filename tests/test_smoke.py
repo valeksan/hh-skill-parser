@@ -489,6 +489,10 @@ class DatabaseTests(unittest.TestCase):
             "found": 0, "unique": 0, "loaded": 0, "errors": 0,
         })
 
+    def test_db_check_reports_healthy_sqlite(self):
+        settings = build_research_parser().parse_args(["db", "--database", str(self.database.path), "check"])
+        self.assertEqual(run_db(settings), {"ok": True, "result": ["ok"]})
+
     def test_skill_discovery_is_local_deterministic_and_excludes_known_aliases(self):
         run_id = self.database.start_run({"fixture": "discovery"})
         for vacancy_id in ("discover-1", "discover-2"):

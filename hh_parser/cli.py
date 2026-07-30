@@ -165,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     db_commands = db.add_subparsers(dest="db_command", required=True)
     db_commands.add_parser("migrate", help="apply packaged SQLite migrations")
+    db_commands.add_parser("check", help="run SQLite integrity check")
     reset = db_commands.add_parser("reset", help="preview or clear all collected/derived data")
     reset.add_argument("--yes", action="store_true", help="permanently clear data; default is preview")
 
@@ -383,6 +384,9 @@ def run_db(settings: argparse.Namespace) -> dict[str, Any]:
     database.migrate()
     if settings.db_command == "migrate":
         return {"migrated": True}
+    if settings.db_command == "check":
+        result = database.integrity_check()
+        return {"ok": result == ["ok"], "result": result}
     summary = database.reset_data_summary()
     if not settings.yes:
         return {"dry_run": True, "tables": summary}

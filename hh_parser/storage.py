@@ -511,6 +511,11 @@ class Database:
                 tx.execute(f"DELETE FROM {table}")
         return summary
 
+    def integrity_check(self) -> list[str]:
+        """Run SQLite integrity check without changing collected data."""
+        with self.connect() as connection:
+            return [str(row[0]) for row in connection.execute("PRAGMA integrity_check")]
+
     def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
         """Create durable run metadata for a local, rebuildable extractor."""
         if kind not in {"relevance", "features", "skills"}:

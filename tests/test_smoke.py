@@ -320,7 +320,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql"],
         )
         self.assertTrue(
             {
@@ -332,6 +332,36 @@ class DatabaseTests(unittest.TestCase):
                 "extraction_runs", "extraction_errors",
             }.issubset(tables)
         )
+
+    def test_da_views_use_latest_snapshot_and_effective_relevance(self):
+        run_id = self.database.start_run({"fixture": "views"})
+        self.database.upsert_vacancy("123", source="api")
+        first = {
+            "content_hash": "views-first", "title": "Старый", "source": "api",
+            "observed_at": "2026-07-01T00:00:00+00:00", "published_at": "2026-06-30T12:00:00+00:00",
+            "employer_id": "42", "employer_name": "АО Пример", "salary_from": 100000,
+        }
+        latest = {**first, "content_hash": "views-latest", "title": "Новый", "observed_at": "2026-07-02T00:00:00+00:00", "salary_to": 120000}
+        self.database.record_snapshot(run_id, "123", first)
+        self.database.record_snapshot(run_id, "123", latest)
+        snapshot_id = self.database.snapshot_id("123", "views-latest")
+        self.database.upsert_auto_relevance(snapshot_id, "borderline", 0.0, [], "test")
+        self.database.set_manual_relevance(snapshot_id, "relevant", "reviewed")
+        with self.database.connect() as connection:
+            latest_row = connection.execute("SELECT title FROM latest_vacancy_snapshots").fetchone()
+            relevant = connection.execute("SELECT title, effective_label FROM relevant_vacancies").fetchone()
+            time_series = connection.execute("SELECT publication_day, vacancy_count FROM publication_time_series").fetchone()
+            employer = connection.execute("SELECT employer_name, vacancy_count FROM vacancy_employers").fetchone()
+            salary = connection.execute("SELECT salary_midpoint FROM vacancy_salary").fetchone()
+            matrix_count = connection.execute("SELECT COUNT(*) FROM vacancy_skill_matrix").fetchone()[0]
+            geography_count = connection.execute("SELECT COUNT(*) FROM vacancy_geography").fetchone()[0]
+        self.assertEqual(latest_row["title"], "Новый")
+        self.assertEqual(tuple(relevant), ("Новый", "relevant"))
+        self.assertEqual(tuple(time_series), ("2026-06-30", 1))
+        self.assertEqual(tuple(employer), ("АО Пример", 1))
+        self.assertEqual(salary["salary_midpoint"], 110000)
+        self.assertEqual(matrix_count, 0)
+        self.assertEqual(geography_count, 1)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

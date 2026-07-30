@@ -30,5 +30,3 @@
 
 [search]
 # queries_file = "query_specs.toml"
-
-# `parse_skills.py` does not read this file. It is separate legacy CSV pipeline.

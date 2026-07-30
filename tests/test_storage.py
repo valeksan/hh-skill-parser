@@ -3,8 +3,6 @@ import gzip
 import hashlib
 import json
 import os
-import subprocess
-import sys
 import tempfile
 from datetime import date
 import unittest
@@ -13,7 +11,6 @@ from unittest import mock
 
 import requests
 
-import parse_skills
 from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
 from hh_parser.sources.html import HHHtmlAntiBotError, HHHtmlSource
@@ -40,10 +37,6 @@ from hh_parser.query_specs import QuerySpec, load_query_specs
 from hh_parser.skill_dictionary import load_skill_dictionary
 from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = REPO_ROOT / "parse_skills.py"
 
 
 class DatabaseTests(unittest.TestCase):
@@ -198,7 +191,7 @@ class DatabaseTests(unittest.TestCase):
         ])
         self.assertEqual(run_export_vacancies(settings), 1)
 
-    def test_mart_export_has_manifest_legacy_skills_and_scope(self):
+    def test_mart_export_has_manifest_compatibility_skills_and_scope(self):
         run_id = self.database.start_run({"fixture": "marts"})
         query_id = self.database.upsert_query("воинский учет", query_group="military")
         self.database.upsert_vacancy("mart-1", source="api")
@@ -864,8 +857,11 @@ class DatabaseTests(unittest.TestCase):
             ]}],
             source_url="https://api.hh.ru/areas",
         )
-        queries_path = Path(self.temp_dir.name) / "queries.txt"
-        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        queries_path = Path(self.temp_dir.name) / "queries.toml"
+        queries_path.write_text(
+            "version = 'fixture'\n[[query]]\nid = 'registration'\nexpression = 'воинский учет'\n",
+            encoding="utf-8",
+        )
         parser = build_research_parser()
         settings = parser.parse_args([
             "collect", "--database", str(self.database.path), "--queries-file", str(queries_path),
@@ -953,8 +949,11 @@ class DatabaseTests(unittest.TestCase):
                 {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
             ]}], source_url="https://api.hh.ru/areas",
         )
-        queries_path = Path(self.temp_dir.name) / "queries.txt"
-        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        queries_path = Path(self.temp_dir.name) / "queries.toml"
+        queries_path.write_text(
+            "version = 'fixture'\n[[query]]\nid = 'registration'\nexpression = 'воинский учет'\n",
+            encoding="utf-8",
+        )
         parser = build_research_parser()
 
         class Source:
@@ -1010,8 +1009,11 @@ class DatabaseTests(unittest.TestCase):
                 {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
             ]}], source_url="https://api.hh.ru/areas",
         )
-        queries_path = Path(self.temp_dir.name) / "queries.txt"
-        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        queries_path = Path(self.temp_dir.name) / "queries.toml"
+        queries_path.write_text(
+            "version = 'fixture'\n[[query]]\nid = 'registration'\nexpression = 'воинский учет'\n",
+            encoding="utf-8",
+        )
         parser = build_research_parser()
         settings = parser.parse_args(["collect", "--collection-mode", "full", "--area", "1"])
         with self.assertRaisesRegex(ValueError, "full collection requires"):

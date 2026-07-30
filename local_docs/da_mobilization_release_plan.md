@@ -58,8 +58,8 @@
 - [x] Добавить data dictionary, примеры DA-запросов и объяснение coverage limits.
 - [x] Явно разделить package DB workflow и legacy `parse_skills.py`; не смешивать
   их source/fallback semantics.
-- [x] После SQLite-derived legacy export принять отдельное решение о сроке
-  удаления legacy pipeline.
+- [x] После SQLite-derived compatibility export удалить legacy pipeline;
+  потребители используют `marts/top_skills_rf.csv` и manifest.
 
 Приёмка:
 

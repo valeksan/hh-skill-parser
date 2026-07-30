@@ -3,8 +3,6 @@ import gzip
 import hashlib
 import json
 import os
-import subprocess
-import sys
 import tempfile
 from datetime import date
 import unittest
@@ -13,7 +11,6 @@ from unittest import mock
 
 import requests
 
-import parse_skills
 from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
 from hh_parser.sources.html import HHHtmlAntiBotError, HHHtmlSource
@@ -40,10 +37,6 @@ from hh_parser.query_specs import QuerySpec, load_query_specs
 from hh_parser.skill_dictionary import load_skill_dictionary
 from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = REPO_ROOT / "parse_skills.py"
 
 
 class NormalizationTests(unittest.TestCase):

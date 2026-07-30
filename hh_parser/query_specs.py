@@ -23,14 +23,10 @@ class QuerySpec:
 
 
 def load_query_specs(path: str | Path) -> list[QuerySpec]:
-    """Load TOML specs or legacy one-expression-per-line input."""
+    """Load versioned TOML query specifications."""
     path = Path(path)
     if path.suffix != ".toml":
-        values = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
-                  if line.strip() and not line.lstrip().startswith("#")]
-        if not values:
-            raise ValueError("query file contains no active expressions")
-        return [QuerySpec(id=f"legacy-{index}", expression=value) for index, value in enumerate(values, 1)]
+        raise ValueError("query specifications must use a .toml file")
     with path.open("rb") as handle:
         document = tomllib.load(handle)
     version = str(document.get("version", "1"))

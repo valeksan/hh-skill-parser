@@ -3,10 +3,8 @@
 Сбор и анализ вакансий, связанных с мобилизационной подготовкой, воинским
 учётом, бронированием, ГО/ЧС и режимно-секретной работой.
 
-Основной workflow — package CLI `hh-skill-parser`: публичный JSON API HH.ru →
-SQLite → offline processing → exports. SQLite — source of truth. `parse_skills.py`
-— отдельный legacy CSV workflow; его source/fallback/filter семантика не равна
-package CLI и результаты не смешиваются.
+Workflow: package CLI `hh-skill-parser`: публичный JSON API HH.ru → SQLite →
+offline processing → exports. SQLite — source of truth.
 
 ## Установка
 
@@ -267,37 +265,6 @@ hh-skill-parser db --database hh_mobilization.sqlite3 reset --yes
 hh-skill-parser db --database hh_mobilization.sqlite3 check
 ```
 
-## Legacy `parse_skills.py`
-
-Этот pipeline оставлен только для existing single-run CSV/chart use cases.
-Он читает `queries.txt`, имеет legacy exact-title filter и может использовать
-`auto` API→HTML fallback. Package CLI читает `query_specs.toml`, сохраняет every
-hit before card, не делает title-only rejection и требует явный `--source html`;
-никакого API→HTML fallback в нём нет. Не используйте legacy CSV как input для
-SQLite workflow и не интерпретируйте package exports как legacy results.
-
-```bash
-# Показать справку; пустой вызов делает то же самое
-python parse_skills.py help
-
-# Обычный одиночный сбор
-python parse_skills.py run --source html --mode description
-
-# Построить PNG из уже собранной общей статистики, без сетевого сбора
-python parse_skills.py chart --chart-input top_skills_rf.csv -o top_skills_rf.png
-```
-
-`chart` не меняет CSV и не обращается к HH. Для него нужен `matplotlib`:
-
-```bash
-pip install -e ".[chart]"
-```
-
-Решение по удалению legacy: оставить до завершения следующего регулярного
-отчётного цикла на SQLite-derived `marts/top_skills_rf.csv`. Затем удалить
-legacy pipeline отдельным change после подтверждения, что CSV/chart consumers
-перешли на mart export; этот change не входит в текущий release.
-
 ## Входные файлы
 
 ### `query_specs.toml`
@@ -318,27 +285,13 @@ search_fields = ["name", "description"]
 purpose = "broad corpus"
 ```
 
-`queries.txt` remains supported for compatibility: one expression per line,
-searched with HH default fields.
-
-### `queries.txt`
-
-Legacy поисковые фразы — по одной на строку. DB-backed CLI does not modify them;
-старый `parse_skills.py` сохраняет свой legacy exact-title behaviour.
-
-```text
-Специалист по мобилизационной подготовке
-Воинский учет
-Специалист по ГО и ЧС
-```
-
 Текущий набор разделён на три контура:
 
 - прямые мобилизационные и военно-учётные роли;
 - гражданская оборона и чрезвычайные ситуации;
 - первый отдел и режимно-секретная работа.
 
-Изменение `queries.txt` относится только к новому run; существующий run сохраняет
+Изменение `query_specs.toml` относится только к новому run; существующий run сохраняет
 свой frozen scope и возобновляется через `resume --run-id`.
 
 ### `skills_whitelist.txt`
@@ -356,23 +309,20 @@ Alias объединяет только варианты одного навык
 ## Результаты
 
 - `hh_mobilization.sqlite3` — source of truth для DB-backed сбора;
-- `top_skills_rf.csv` — legacy CSV-экспорт;
-- `top_skills_rf.png` — график, созданный командой `chart` из итогового CSV;
+- `marts/` — воспроизводимый DA bundle с `manifest.json`;
+- `marts/top_skills_rf.csv` — SQLite-derived compatibility export навыков.
 
 ## Фильтрация
 
 DB-backed collector сохраняет каждый query hit до загрузки карточки и не делает
 title-only rejection. Relevance/features/skills вычисляются отдельными offline
-командами. Описанный ниже title filter относится только к legacy
-`parse_skills.py`.
+командами.
 
 ## Сеть и ограничения HH
 
 DB-backed collector uses public `https://api.hh.ru` JSON API with one
 `HH-User-Agent`, optional Bearer token, gzip and bounded transient retries.
 Invalid token is removed after one auth event; run continues unauthenticated.
-Legacy HTML collection may be limited by anti-bot protection and uses its own
-legacy browser/proxy settings.
 
 Сорок запросов по десяти зонам — длительный сбор. Для продолжения используйте
 `hh-skill-parser resume --run-id RUN_ID`.

@@ -14,6 +14,7 @@ import requests
 
 from .areas import AreaSelectionError, find_overlaps, load_area_file, select_catalog_areas, validate_area_ids
 from .collector import Collector
+from .config import cli_defaults, load_config
 from .sources.api import HHApiSource
 from .storage import Database
 
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     collect = commands.add_parser("collect", help="collect HH vacancies into SQLite")
+    collect.add_argument("--config")
     collect.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     collect.add_argument("--queries-file", default="queries.txt")
     collect.add_argument("--area", action="append", default=[])
@@ -81,12 +83,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_transport_arguments(collect)
 
     resume = commands.add_parser("resume", help="resume one degraded/interrupted SQLite run")
+    resume.add_argument("--config")
     resume.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     resume.add_argument("--run-id", required=True, type=int)
     resume.add_argument("--queries-file", default="queries.txt")
     resume.add_argument("--max-pages", type=int, default=20)
     add_transport_arguments(resume)
     return parser
+
+
+def apply_defaults(parser: argparse.ArgumentParser, defaults: dict[str, Any]) -> None:
+    """Override argparse action defaults, including command-specific options."""
+    for action in parser._actions:
+        if action.dest in defaults:
+            action.default = defaults[action.dest]
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                apply_defaults(child, defaults)
 
 
 def resolve_collect_areas(settings: argparse.Namespace, database: Database) -> tuple[list[str], int | None, str]:
@@ -146,7 +159,7 @@ def run_collect(
         "date_slice_min_days": settings.date_slice_min_days,
         "date_overlap_days": settings.date_overlap_days,
     }
-    collector = Collector(database)
+    collector = Collector(database, transport=source)
     run_id = collector.start(
         config, area_ids, catalog_version_id=catalog_version_id,
         selection_source=selection_source, source_policy=settings.source,
@@ -176,7 +189,7 @@ def run_resume(
     config = database.run_config(settings.run_id)
     source = source_factory(settings)
     if config.get("date_from"):
-        return Collector(database).resume_sliced(
+        return Collector(database, transport=source).resume_sliced(
             settings.run_id, load_query_file(settings.queries_file),
             search_page=source.search_page, detail=source.detail,
             max_pages=config.get("max_pages", settings.max_pages),
@@ -184,7 +197,7 @@ def run_resume(
             min_window_days=config.get("date_slice_min_days", 1),
             overlap_days=config.get("date_overlap_days", 1),
         )
-    return Collector(database).resume_paginated(
+    return Collector(database, transport=source).resume_paginated(
         settings.run_id, load_query_file(settings.queries_file),
         search_page=source.search_page, detail=source.detail,
         max_pages=config.get("max_pages", settings.max_pages),
@@ -193,7 +206,19 @@ def run_resume(
 
 def main(argv: list[str] | None = None) -> None:
     """Run collect/resume command and print machine-readable result."""
-    settings = build_parser().parse_args(argv)
+    argv = argv if argv is not None else os.sys.argv[1:]
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config")
+    config_path, _ = config_parser.parse_known_args(argv)
+    parser = build_parser()
+    apply_defaults(parser, cli_defaults(load_config(config_path.config)))
+    environment = {
+        "access_token": os.environ.get("HH_ACCESS_TOKEN"),
+        "user_agent": os.environ.get("HH_USER_AGENT"),
+        "database": os.environ.get("HH_DATABASE"),
+    }
+    apply_defaults(parser, {key: value for key, value in environment.items() if value is not None})
+    settings = parser.parse_args(argv)
     try:
         if settings.command == "collect":
             run_id, counters = run_collect(settings)

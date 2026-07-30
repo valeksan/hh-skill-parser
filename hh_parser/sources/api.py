@@ -29,6 +29,29 @@ class HHApiSource:
         })
         if access_token:
             self.session.headers["Authorization"] = f"Bearer {access_token}"
+        self._auth_degradation: dict[str, int] | None = None
+
+    def consume_auth_degradation(self) -> dict[str, int] | None:
+        """Return one token-failure event without exposing its credential."""
+        event = self._auth_degradation
+        self._auth_degradation = None
+        return event
+
+    def _get(self, path: str, **kwargs: Any) -> requests.Response:
+        """Request API; one rejected bearer token degrades to public API."""
+        response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
+        try:
+            response.raise_for_status()
+        except requests.HTTPError:
+            status = getattr(response, "status_code", None)
+            if status not in {401, 403} or "Authorization" not in self.session.headers:
+                raise
+            self.session.headers.pop("Authorization", None)
+            if self._auth_degradation is None:
+                self._auth_degradation = {"http_status": int(status)}
+            response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
+            response.raise_for_status()
+        return response
 
     def search(self, expression: str, area_id: str, *, per_page: int = 100) -> list[dict[str, Any]]:
         """Fetch first documented search page; caller persists coverage unit."""
@@ -50,12 +73,7 @@ class HHApiSource:
         if date_from:
             params["date_from"] = date_from
             params["date_to"] = date_to
-        response = self.session.get(
-            f"{self.base_url}/vacancies",
-            params=params,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
+        response = self._get("/vacancies", params=params)
         payload = response.json()
         items = payload.get("items")
         if not isinstance(items, list):
@@ -71,10 +89,7 @@ class HHApiSource:
 
     def detail(self, candidate: dict[str, Any]) -> dict[str, Any]:
         """Fetch one vacancy card by HH ID."""
-        response = self.session.get(
-            f"{self.base_url}/vacancies/{candidate['id']}", timeout=self.timeout,
-        )
-        response.raise_for_status()
+        response = self._get(f"/vacancies/{candidate['id']}")
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("HH API vacancy response must be an object")

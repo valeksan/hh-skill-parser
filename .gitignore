@@ -211,3 +211,4 @@ __marimo__/
 progress.json
 *.png
 *.csv
+config.toml

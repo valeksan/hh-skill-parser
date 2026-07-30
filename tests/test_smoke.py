@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import requests
+
 import parse_skills
 import start
 from hh_parser.storage import Database
@@ -18,7 +20,8 @@ from hh_parser.areas import (
     select_catalog_areas, validate_area_ids,
 )
 from hh_parser.collector import Collector, split_date_window
-from hh_parser.cli import build_parser as build_research_parser, run_collect, run_resume
+from hh_parser.cli import apply_defaults, build_parser as build_research_parser, run_collect, run_resume
+from hh_parser.config import cli_defaults, load_config
 from hh_parser.sources.api import HHApiSource
 
 
@@ -710,6 +713,88 @@ class ApiSourceTests(unittest.TestCase):
         self.assertNotIn("User-Agent", session.headers)
         self.assertNotIn("Authorization", session.headers)
         self.assertEqual(session.calls[0][1]["params"]["date_to"], "2026-01-31")
+
+    def test_rejected_bearer_token_retries_public_api_and_emits_one_safe_event(self):
+        class Response:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self.payload = payload or {"items": [], "pages": 0}
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    error = requests.HTTPError(f"HTTP {self.status_code}")
+                    error.response = self
+                    raise error
+
+            def json(self):
+                return self.payload
+
+        class Session:
+            def __init__(self):
+                self.headers = {}
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, dict(self.headers), kwargs))
+                return Response(401 if len(self.calls) == 1 else 200)
+
+        session = Session()
+        source = HHApiSource(user_agent="test-app/1.0", access_token="secret-token", session=session)
+        source.search_page("воинский учет", "1", page=0)
+
+        self.assertIn("Authorization", session.calls[0][1])
+        self.assertNotIn("Authorization", session.calls[1][1])
+        self.assertNotIn("Authorization", session.headers)
+        self.assertEqual(source.consume_auth_degradation(), {"http_status": 401})
+        self.assertIsNone(source.consume_auth_degradation())
+
+    def test_collector_marks_run_degraded_after_safe_auth_fallback(self):
+        class Transport:
+            def consume_auth_degradation(self):
+                return {"http_status": 403}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = Collector(database, transport=Transport()).start({"fixture": "auth"}, ["1"])
+            counters = Collector(database, transport=Transport()).collect_paginated(
+                run_id, ["1"], ["воинский учет"],
+                search_page=lambda *_args, **_kwargs: ([], True), detail=lambda candidate: candidate,
+            )
+            with database.connect() as connection:
+                run = connection.execute("SELECT status FROM collection_runs WHERE id = ?", (run_id,)).fetchone()
+                error = connection.execute(
+                    "SELECT error_type, http_status, message FROM collection_errors WHERE run_id = ?", (run_id,)
+                ).fetchone()
+        self.assertEqual(run["status"], "degraded")
+        self.assertEqual(tuple(error[:2]), ("AuthenticationDegraded", 403))
+        self.assertNotIn("secret-token", error["message"])
+
+
+class ConfigTests(unittest.TestCase):
+    def test_toml_config_maps_to_cli_defaults_and_rejects_unknown_keys(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(
+                "[database]\npath = 'from-toml.sqlite3'\n"
+                "[collection]\nmode = 'full'\nmax_pages = 3\n"
+                "[search]\nqueries_file = 'queries.toml.txt'\n",
+                encoding="utf-8",
+            )
+            config = load_config(path)
+            defaults = cli_defaults(config)
+            settings = build_research_parser()
+            apply_defaults(settings, defaults)
+            parsed = settings.parse_args(["collect", "--area", "1"])
+        self.assertEqual(parsed.database, "from-toml.sqlite3")
+        self.assertEqual((parsed.collection_mode, parsed.max_pages), ("full", 3))
+        self.assertEqual(parsed.queries_file, "queries.toml.txt")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "bad.toml"
+            path.write_text("[collection]\nunknown = 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown config key"):
+                load_config(path)
 
 
 class AreaTests(unittest.TestCase):

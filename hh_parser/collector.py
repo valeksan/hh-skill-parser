@@ -13,8 +13,9 @@ from .storage import Database
 class Collector:
     """Collect candidates before relevance decisions; persist every stage."""
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, *, transport: Any | None = None):
         self.database = database
+        self.transport = transport
         self.loaded_ids: set[str] = set()
 
     def start(
@@ -93,9 +94,7 @@ class Collector:
                             run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                             area_id=int(area_id), vacancy_hh_id=vacancy_id,
                         )
-        counters = self.database.run_counters(run_id)
-        self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
-        return counters
+        return self._finish(run_id)
 
     def resume(
         self, run_id: int, queries: Iterable[str], *,
@@ -135,9 +134,7 @@ class Collector:
                         query_id=query_id, area_id=int(area_id),
                         date_from=date_from, date_to=date_to,
                     )
-        counters = self.database.run_counters(run_id)
-        self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
-        return counters
+        return self._finish(run_id)
 
     def collect_sliced(
         self, run_id: int, area_ids: Iterable[str], queries: Iterable[str], *,
@@ -177,6 +174,19 @@ class Collector:
                             query_id=query_id, area_id=int(area_id),
                             date_from=window_from, date_to=window_to,
                         )
+        return self._finish(run_id)
+
+    def _finish(self, run_id: int) -> dict[str, int]:
+        """Persist transport degradation before calculating final run state."""
+        consume = getattr(self.transport, "consume_auth_degradation", None)
+        if callable(consume):
+            event = consume()
+            if event:
+                self.database.record_error(
+                    run_id, "auth", "AuthenticationDegraded",
+                    "HH access token was rejected; continued with public API",
+                    http_status=event.get("http_status"),
+                )
         counters = self.database.run_counters(run_id)
         self.database.finish_run(run_id, "completed" if not counters["errors"] else "degraded", counters)
         return counters

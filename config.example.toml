@@ -1,0 +1,24 @@
+# Copy to config.toml. CLI overrides env; env overrides this file.
+
+[hh]
+# access_token = ""
+# user_agent = "hh-skill-parser/1.0 (contact@example.invalid)"
+# request_timeout = 30.0
+
+[database]
+# path = "hh_mobilization.sqlite3"
+
+[collection]
+# mode = "incremental"
+# max_pages = 20
+# areas_file = "areas.txt"
+# areas_source = "explicit"
+# area_root = "113"
+# area_level = "root"
+# date_from = "2026-01-01"
+# date_to = "2026-01-31"
+# date_slice_min_days = 1
+# date_overlap_days = 1
+
+[search]
+# queries_file = "queries.txt"

@@ -53,6 +53,11 @@ hh-skill-parser extract --skills-file skills_whitelist.txt skills
 hh-skill-parser export vacancies --output vacancies.csv --snapshot latest --relevance relevant
 hh-skill-parser export skills --output vacancy_skills.csv
 
+# ANA-1: fixed 100-row pilot, then manually fill labels and import CSV.
+hh-skill-parser pilot create --batch-id 2026-07-30-v1 --output pilot.csv
+hh-skill-parser import labeling pilot.csv
+hh-skill-parser pilot report --batch-id 2026-07-30-v1 --output pilot-report.json
+
 # JSON counts по той же offline выборке.
 hh-skill-parser stats --snapshot latest --query-family military
 ```
@@ -68,6 +73,9 @@ watermark.
 `export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
+`pilot create` фиксирует выбранные snapshot IDs, filters и query specs в SQLite;
+`pilot report` пересчитывает union precision/recall-in-pilot, overlap и marginal gain
+только по сохранённому batch и manual labels. `unknown`/blank не входят в binary metrics.
 HTML anti-bot/interstitial страница сохраняется как ошибка run, не как вакансия.
 
 ## Конфигурация DB-backed CLI

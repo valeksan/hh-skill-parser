@@ -35,6 +35,7 @@ from hh_parser.cli import (
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
+from hh_parser.pilot import create_pilot, pilot_report
 from hh_parser.query_specs import QuerySpec, load_query_specs
 from hh_parser.skill_dictionary import load_skill_dictionary
 from relevance import classify_relevance
@@ -327,7 +328,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql", "0019_vacancy_history.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql", "0019_vacancy_history.sql", "0020_relevance_pilots.sql"],
         )
         self.assertTrue(
             {
@@ -339,6 +340,7 @@ class DatabaseTests(unittest.TestCase):
                 "skills", "skill_aliases", "vacancy_skills",
                 "extraction_runs", "extraction_errors",
                 "collection_watermarks",
+                "relevance_pilot_batches", "relevance_pilot_items",
             }.issubset(tables)
         )
 
@@ -1749,6 +1751,32 @@ class ConfigTests(unittest.TestCase):
             with database.connect() as connection:
                 label = connection.execute("SELECT manual_label, manual_reason FROM relevance_labels").fetchone()
         self.assertEqual(tuple(label), ("relevant", "reviewed"))
+
+    def test_pilot_persists_selection_and_reports_query_family_metrics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = Collector(database).start({"fixture": "pilot"}, ["1"])
+            strong = database.upsert_query("мобилизац*", version="pilot-v1", query_group="strong_markers")
+            exact = database.upsert_query('"воинский учет"', version="pilot-v1", query_group="stable_phrases")
+            ambiguous = database.upsert_query('"первый отдел"', version="pilot-v1", query_group="controlled")
+            for hh_id, label, queries in (("1", "relevant", [strong]), ("2", "relevant", [exact]), ("3", "irrelevant", [ambiguous]), ("4", "relevant", [strong, ambiguous])):
+                database.upsert_vacancy(hh_id, source="api")
+                snapshot = normalize_api_vacancy({"id": hh_id, "name": f"Вакансия {hh_id}"})
+                database.record_snapshot(run_id, hh_id, snapshot)
+                snapshot_id = database.snapshot_id(hh_id, snapshot["content_hash"])
+                database.upsert_auto_relevance(snapshot_id, "borderline", 0.0, [], "test")
+                database.set_manual_relevance(snapshot_id, label, "fixture")
+                for query_id in queries:
+                    database.record_query_hit(run_id, query_id, hh_id, area_id=1)
+            count, _ = create_pilot(database, "pilot-v1", sample_size=100, sample_seed="seed", filters={"run_ids": [run_id], "area_ids": [], "date_from": None, "date_to": None, "snapshot_scope": "all"})
+            report = pilot_report(database, "pilot-v1", min_per_stratum=5)
+        self.assertEqual(count, 4)
+        self.assertEqual(report["union"]["precision"], 3 / 4)
+        self.assertEqual(report["union"]["recall_in_pilot"], 1.0)
+        self.assertEqual({row["query_family"] for row in report["query_families"]}, {"strong_markers", "stable_phrases", "controlled"})
+        self.assertTrue(report["selection_version"])
+        self.assertTrue(report["label_set_version"])
 
     def test_toml_config_maps_to_cli_defaults_and_rejects_unknown_keys(self):
         with tempfile.TemporaryDirectory() as temp_dir:

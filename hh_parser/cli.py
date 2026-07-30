@@ -23,6 +23,7 @@ from .extractors.offline import extract as run_extraction
 from .export import export_query_hits, export_roles, export_skills, export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
+from .pilot import create_pilot, export_pilot_labels, pilot_report
 from .query_specs import QuerySpec, load_query_specs
 from .skill_dictionary import load_skill_dictionary
 from .sources.api import HHApiSource
@@ -257,6 +258,24 @@ def build_parser() -> argparse.ArgumentParser:
     labeling_export.add_argument("--output", required=True)
     labeling_export.add_argument("--sample-size", type=nonnegative_int, default=0)
     labeling_export.add_argument("--sample-seed", default="0")
+    pilot = commands.add_parser("pilot", help="create and measure persistent relevance-labeling pilots")
+    pilot.add_argument("--config")
+    add_database_arguments(pilot)
+    pilot_commands = pilot.add_subparsers(dest="pilot_command", required=True)
+    pilot_create = pilot_commands.add_parser("create", help="write deterministic pilot CSV and persist selection")
+    pilot_create.add_argument("--batch-id", required=True)
+    pilot_create.add_argument("--output", required=True)
+    pilot_create.add_argument("--sample-size", type=positive_int, default=100)
+    pilot_create.add_argument("--sample-seed", default="0")
+    pilot_create.add_argument("--snapshot", choices=["latest", "all"], default="latest")
+    pilot_create.add_argument("--run-id", action="append", type=int, default=[])
+    pilot_create.add_argument("--area", action="append", default=[])
+    pilot_create.add_argument("--date-from", type=parse_iso_date)
+    pilot_create.add_argument("--date-to", type=parse_iso_date)
+    pilot_report_command = pilot_commands.add_parser("report", help="calculate offline query-family pilot metrics")
+    pilot_report_command.add_argument("--batch-id", required=True)
+    pilot_report_command.add_argument("--output", required=True)
+    pilot_report_command.add_argument("--min-per-stratum", type=positive_int, default=5)
     vacancies_export = export_commands.add_parser("vacancies", help="export vacancy snapshots CSV")
     vacancies_export.add_argument("--output", required=True)
     vacancies_export.add_argument("--snapshot", choices=["latest", "all"], default="latest")
@@ -506,6 +525,20 @@ def run_export_labeling(settings: argparse.Namespace) -> int:
     )
 
 
+def run_pilot(settings: argparse.Namespace) -> dict[str, Any]:
+    database = database_for(settings)
+    database.migrate()
+    if settings.pilot_command == "create":
+        validate_date_range(settings.date_from, settings.date_to)
+        filters = {"run_ids": settings.run_id, "area_ids": settings.area, "date_from": settings.date_from, "date_to": settings.date_to, "snapshot_scope": settings.snapshot}
+        count, rows = create_pilot(database, settings.batch_id, sample_size=settings.sample_size, sample_seed=settings.sample_seed, filters=filters)
+        export_pilot_labels(rows, settings.output)
+        return {"batch_id": settings.batch_id, "rows": count, "output": settings.output}
+    report = pilot_report(database, settings.batch_id, min_per_stratum=settings.min_per_stratum)
+    Path(settings.output).write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"batch_id": settings.batch_id, "output": settings.output, "rows": report["sample"]["selected"]}
+
+
 def run_export_vacancies(settings: argparse.Namespace) -> int:
     """Write filtered vacancy CSV without invoking HH or an extractor."""
     validate_date_range(settings.date_from, settings.date_to)
@@ -691,6 +724,8 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 rows = run_export_relation(settings)
             print(json.dumps({"rows": rows}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "pilot":
+            print(json.dumps(run_pilot(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "areas":
             if settings.areas_command == "sync":
                 print(json.dumps({"catalog_version": run_areas_sync(settings)}, sort_keys=True))

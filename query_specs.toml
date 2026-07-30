@@ -1,0 +1,88 @@
+version = "2026-07-30"
+
+# Broad contour: strong roots only. Search title and description.
+[[query]]
+id = "strong-mobilization"
+group = "strong_markers"
+expression = "мобилизац*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+
+[[query]]
+id = "strong-military-registration"
+group = "strong_markers"
+expression = "военно-учетн*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+
+[[query]]
+id = "strong-classified-records"
+group = "strong_markers"
+expression = "режимно-секретн*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+
+[[query]]
+id = "strong-state-secret"
+group = "strong_markers"
+expression = "гостайн*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+
+# Stable phrases: exact roles/phrases in title for precision slices.
+[[query]]
+id = "title-military-registration"
+group = "stable_phrases"
+expression = "\"воинский учет\""
+search_fields = ["name"]
+purpose = "high precision"
+
+[[query]]
+id = "title-civil-defense"
+group = "stable_phrases"
+expression = "\"гражданская оборона\""
+search_fields = ["name"]
+purpose = "high precision"
+
+[[query]]
+id = "title-classified-records"
+group = "stable_phrases"
+expression = "\"секретное делопроизводство\""
+search_fields = ["name"]
+purpose = "high precision"
+
+[[query]]
+id = "title-wartime"
+group = "stable_phrases"
+expression = "\"военное время\""
+search_fields = ["name"]
+purpose = "high precision"
+
+# Controlled ambiguity. Keep evidence for later precision/recall assessment.
+[[query]]
+id = "context-reservation"
+group = "contextual_ambiguity"
+expression = "бронирован* AND (военнообязан* OR воинск* OR запас*)"
+search_fields = ["name", "description"]
+purpose = "controlled recall"
+
+[[query]]
+id = "context-first-department"
+group = "controlled"
+expression = "\"первый отдел\""
+search_fields = ["name", "description"]
+purpose = "controlled recall"
+
+[[query]]
+id = "context-civil-defense-emergencies"
+group = "controlled"
+expression = "\"ГО и ЧС\""
+search_fields = ["name", "description"]
+purpose = "controlled recall"
+
+[[query]]
+id = "context-state-secret-protection"
+group = "controlled"
+expression = "\"защита государственной тайны\""
+search_fields = ["name", "description"]
+purpose = "controlled recall"

@@ -23,4 +23,4 @@
 # date_overlap_days = 1
 
 [search]
-# queries_file = "queries.txt"
+# queries_file = "query_specs.toml"

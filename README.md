@@ -113,9 +113,31 @@ pip install -e ".[chart]"
 
 ## Входные файлы
 
+### `query_specs.toml`
+
+Default DB-backed collector uses versioned query specs. Each query keeps HH
+expression unchanged and explicitly selects `name`, `description`, or both.
+This makes exact title roles and broad thematic corpus separate, without forced
+outer quotes.
+
+```toml
+version = "2026-07-30"
+
+[[query]]
+id = "strong-mobilization"
+group = "strong_markers"
+expression = "мобилизац*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+```
+
+`queries.txt` remains supported for compatibility: one expression per line,
+searched with HH default fields.
+
 ### `queries.txt`
 
-Поисковые фразы — по одной на строку. Кавычки не нужны: перед запросом к HH скрипт сам оборачивает каждую фразу в двойные кавычки для точного поиска. Старые строки с внешними кавычками тоже поддерживаются.
+Legacy поисковые фразы — по одной на строку. DB-backed CLI does not modify them;
+старый `parse_skills.py` сохраняет свой legacy exact-title behaviour.
 
 ```text
 Специалист по мобилизационной подготовке

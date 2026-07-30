@@ -31,7 +31,7 @@ from hh_parser.cli import (
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
-from hh_parser.query_specs import load_query_specs
+from hh_parser.query_specs import QuerySpec, load_query_specs
 from hh_parser.skill_dictionary import load_skill_dictionary
 from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
@@ -937,6 +937,50 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(resumed, {"found": 1, "unique": 1, "loaded": 1, "errors": 0})
         self.assertEqual((source.search_calls, source.detail_calls), (1, 2))
 
+    def test_resume_uses_frozen_query_spec_not_changed_file(self):
+        self.database.store_area_catalog(
+            [{"id": "113", "name": "Россия", "areas": [
+                {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+            ]}], source_url="https://api.hh.ru/areas",
+        )
+        queries_path = Path(self.temp_dir.name) / "queries.toml"
+        queries_path.write_text(
+            "version = 'v1'\n[[query]]\nid = 'broad'\nexpression = 'мобилизац*'\n"
+            "search_fields = ['name', 'description']\n", encoding="utf-8",
+        )
+        parser = build_research_parser()
+        settings = parser.parse_args([
+            "collect", "--database", str(self.database.path), "--queries-file", str(queries_path), "--area", "1",
+        ])
+
+        class Source:
+            def __init__(self):
+                self.calls = []
+
+            def search_page(self, query, area_id, **kwargs):
+                self.calls.append((query, kwargs.get("search_fields")))
+                if len(self.calls) == 1:
+                    raise RuntimeError("interrupt")
+                return [], True
+
+            def detail(self, candidate):
+                return candidate
+
+        source = Source()
+        run_id, _ = run_collect(settings, source_factory=lambda _: source)
+        queries_path.write_text(
+            "[[query]]\nid = 'changed'\nexpression = 'другая фраза'\nsearch_fields = ['name']\n",
+            encoding="utf-8",
+        )
+        run_resume(
+            parser.parse_args(["resume", "--database", str(self.database.path), "--run-id", str(run_id)]),
+            source_factory=lambda _: source,
+        )
+        self.assertEqual(source.calls, [
+            ("мобилизац*", ("name", "description")),
+            ("мобилизац*", ("name", "description")),
+        ])
+
     def test_paginated_collector_records_each_page_and_flags_depth_saturation(self):
         collector = Collector(self.database)
         run_id = collector.start({"fixture": True}, ["1"])
@@ -1009,6 +1053,20 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(calls, [(0, "2026-01-01", "2026-01-31")])
         self.assertEqual(tuple(page), ("2026-01-01", "2026-01-31"))
+
+    def test_paginated_collector_passes_query_spec_search_fields(self):
+        run_id = Collector(self.database).start({"fixture": "query-fields"}, ["1"])
+        received = []
+
+        def search_page(_query, _area_id, **kwargs):
+            received.append(kwargs.get("search_fields"))
+            return [], True
+
+        Collector(self.database).collect_paginated(
+            run_id, ["1"], [QuerySpec("broad", "мобилизац*", search_fields=("name", "description"))],
+            search_page=search_page, detail=lambda candidate: candidate,
+        )
+        self.assertEqual(received, [("name", "description")])
 
     def test_saturated_date_window_splits_until_every_child_fits(self):
         collector = Collector(self.database)
@@ -1184,6 +1242,7 @@ class ApiSourceTests(unittest.TestCase):
         source = HHApiSource(user_agent="test-app/1.0 (dev@example.com)", session=session)
         items, is_last = source.search_page(
             "воинский учет", "1", page=0, date_from="2026-01-01", date_to="2026-01-31",
+            search_fields=("name", "description"),
         )
         self.assertEqual(items[0]["_source"], "api")
         self.assertTrue(is_last)
@@ -1191,6 +1250,7 @@ class ApiSourceTests(unittest.TestCase):
         self.assertNotIn("User-Agent", session.headers)
         self.assertNotIn("Authorization", session.headers)
         self.assertEqual(session.calls[0][1]["params"]["date_to"], "2026-01-31")
+        self.assertEqual(session.calls[0][1]["params"]["search_field"], ["name", "description"])
 
     def test_rejected_bearer_token_retries_public_api_and_emits_one_safe_event(self):
         class Response:
@@ -1375,6 +1435,22 @@ class ConfigTests(unittest.TestCase):
             specs = load_query_specs(path)
         self.assertEqual(specs[0].expression, "мобилизац*")
         self.assertEqual(specs[0].version, "v2")
+
+    def test_query_specs_reject_unsupported_or_repeated_search_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "queries.toml"
+            path.write_text(
+                "[[query]]\nid = 'bad'\nexpression = 'x'\nsearch_fields = ['name', 'name']\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "duplicates"):
+                load_query_specs(path)
+            path.write_text(
+                "[[query]]\nid = 'bad'\nexpression = 'x'\nsearch_fields = ['company_name']\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                load_query_specs(path)
 
     def test_relevance_is_explainable_and_keeps_uncertain_candidates(self):
         self.assertEqual(classify_relevance("Специалист", "Воинский учет сотрудников")[0], "relevant")

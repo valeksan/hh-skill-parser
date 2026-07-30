@@ -54,9 +54,20 @@ def load_query_specs(path: str | Path) -> list[QuerySpec]:
         fields = row.get("search_fields", [])
         if not isinstance(fields, list) or not all(isinstance(item, str) for item in fields):
             raise ValueError(f"query {query_id}: search_fields must be string array")
+        if len(fields) != len(set(fields)):
+            raise ValueError(f"query {query_id}: search_fields must not contain duplicates")
+        unknown_fields = set(fields) - ALLOWED_SEARCH_FIELDS
+        if unknown_fields:
+            raise ValueError(f"query {query_id}: unsupported search_fields: {sorted(unknown_fields)[0]}")
+        for name, value in (("group", row.get("group")), ("purpose", row.get("purpose"))):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"query {query_id}: {name} must be nonempty string")
+        if not isinstance(row.get("enabled", True), bool):
+            raise ValueError(f"query {query_id}: enabled must be boolean")
         result.append(QuerySpec(query_id, expression.strip(), row.get("group"), row.get("purpose"), version,
                                 tuple(fields), row.get("enabled", True)))
     active = [item for item in result if item.enabled]
     if not active:
         raise ValueError("query TOML contains no enabled expressions")
     return active
+ALLOWED_SEARCH_FIELDS = frozenset({"name", "description"})

@@ -22,7 +22,7 @@ from .extractors.offline import extract as run_extraction
 from .export import export_query_hits, export_roles, export_skills, export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
-from .query_specs import load_query_specs
+from .query_specs import QuerySpec, load_query_specs
 from .skill_dictionary import load_skill_dictionary
 from .sources.api import HHApiSource
 from .stats import vacancy_stats
@@ -64,6 +64,43 @@ def load_query_file(path: str | Path):
     return load_query_specs(path)
 
 
+def freeze_query_specs(queries: list[QuerySpec]) -> list[dict[str, Any]]:
+    """Serialize complete query scope into run config for reproducible resume."""
+    return [
+        {
+            "id": query.id, "expression": query.expression, "group": query.group,
+            "purpose": query.purpose, "version": query.version,
+            "search_fields": list(query.search_fields),
+        }
+        for query in queries
+    ]
+
+
+def load_frozen_query_specs(config: dict[str, Any], fallback_path: str | Path) -> list[QuerySpec]:
+    """Use immutable run query scope; retain compatibility with pre-freeze runs."""
+    rows = config.get("query_specs")
+    if rows is None:
+        return load_query_file(fallback_path)
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("run has invalid frozen query specifications")
+    result = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("run has invalid frozen query specifications")
+        try:
+            query = QuerySpec(
+                id=row["id"], expression=row["expression"], group=row.get("group"),
+                purpose=row.get("purpose"), version=row["version"],
+                search_fields=tuple(row.get("search_fields", [])),
+            )
+        except (KeyError, TypeError) as error:
+            raise ValueError("run has invalid frozen query specifications") from error
+        if not isinstance(query.id, str) or not query.id or not isinstance(query.expression, str) or not query.expression:
+            raise ValueError("run has invalid frozen query specifications")
+        result.append(query)
+    return result
+
+
 def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
     """Add API connection options shared by collect and resume."""
     parser.add_argument("--source", choices=["api"], default="api")
@@ -82,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect = commands.add_parser("collect", help="collect HH vacancies into SQLite")
     collect.add_argument("--config")
     collect.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
-    collect.add_argument("--queries-file", default="queries.txt")
+    collect.add_argument("--queries-file", default="query_specs.toml")
     collect.add_argument("--area", action="append", default=[])
     collect.add_argument("--areas-file")
     collect.add_argument("--areas-source", choices=["explicit", "catalog"], default="explicit")
@@ -102,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--config")
     resume.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     resume.add_argument("--run-id", required=True, type=int)
-    resume.add_argument("--queries-file", default="queries.txt")
+    resume.add_argument("--queries-file", default="query_specs.toml")
     resume.add_argument("--max-pages", type=int, default=20)
     add_transport_arguments(resume)
 
@@ -271,7 +308,7 @@ def run_collect(
     queries = load_query_file(settings.queries_file)
     source = source_factory(settings)
     config = {
-        "queries_file": str(settings.queries_file), "area_ids": area_ids,
+        "queries_file": str(settings.queries_file), "query_specs": freeze_query_specs(queries), "area_ids": area_ids,
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
         "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
@@ -311,7 +348,7 @@ def run_resume(
     source = source_factory(settings)
     if config.get("date_from"):
         return Collector(database, transport=source).resume_sliced(
-            settings.run_id, load_query_file(settings.queries_file),
+            settings.run_id, load_frozen_query_specs(config, settings.queries_file),
             search_page=source.search_page, detail=source.detail,
             max_pages=config.get("max_pages", settings.max_pages),
             date_from=config["date_from"], date_to=config["date_to"],
@@ -319,7 +356,7 @@ def run_resume(
             overlap_days=config.get("date_overlap_days", 1),
         )
     return Collector(database, transport=source).resume_paginated(
-        settings.run_id, load_query_file(settings.queries_file),
+        settings.run_id, load_frozen_query_specs(config, settings.queries_file),
         search_page=source.search_page, detail=source.detail,
         max_pages=config.get("max_pages", settings.max_pages),
     )

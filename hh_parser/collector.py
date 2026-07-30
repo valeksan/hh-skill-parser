@@ -31,10 +31,10 @@ class Collector:
         return run_id
 
     @staticmethod
-    def _query(value: str | QuerySpec) -> tuple[str, dict[str, Any]]:
+    def _query(value: str | QuerySpec) -> tuple[str, dict[str, Any], tuple[str, ...]]:
         if isinstance(value, QuerySpec):
-            return value.expression, {"version": value.version, "query_group": value.group, "purpose": value.purpose}
-        return value, {}
+            return value.expression, {"version": value.version, "query_group": value.group, "purpose": value.purpose}, value.search_fields
+        return value, {}, ()
 
     @staticmethod
     def _http_status(error: Exception) -> int | None:
@@ -51,7 +51,7 @@ class Collector:
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
             for query in queries:
-                expression, metadata = self._query(query)
+                expression, metadata, _ = self._query(query)
                 query_id = self.database.upsert_query(expression, **metadata)
                 if self.database.search_page_succeeded(
                     run_id, query_id, area_id=int(area_id)
@@ -138,11 +138,11 @@ class Collector:
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
             for query in queries:
-                expression, metadata = self._query(query)
+                expression, metadata, search_fields = self._query(query)
                 query_id = self.database.upsert_query(expression, **metadata)
                 saturated = self._collect_search_unit(
                     run_id, query_id, expression, int(area_id), search_page, detail,
-                    max_pages=max_pages, date_from=date_from, date_to=date_to,
+                    max_pages=max_pages, date_from=date_from, date_to=date_to, search_fields=search_fields,
                 )
                 if saturated:
                     self.database.record_error(
@@ -168,14 +168,14 @@ class Collector:
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
             for query in queries:
-                expression, metadata = self._query(query)
+                expression, metadata, search_fields = self._query(query)
                 query_id = self.database.upsert_query(expression, **metadata)
                 pending = [(date_from, date_to)]
                 while pending:
                     window_from, window_to = pending.pop(0)
                     saturated = self._collect_search_unit(
                         run_id, query_id, expression, int(area_id), search_page, detail,
-                        max_pages=max_pages, date_from=window_from, date_to=window_to,
+                        max_pages=max_pages, date_from=window_from, date_to=window_to, search_fields=search_fields,
                     )
                     if not saturated:
                         continue
@@ -242,7 +242,7 @@ class Collector:
         self, run_id: int, query_id: int, expression: str, area_id: int,
         search_page: Callable[..., tuple[list[dict[str, Any]], bool]],
         detail: Callable[[dict[str, Any]], dict[str, Any]], *, max_pages: int,
-        date_from: str | None, date_to: str | None,
+        date_from: str | None, date_to: str | None, search_fields: tuple[str, ...] = (),
     ) -> bool:
         """Collect one query×area×window. Return True only for API-depth saturation."""
         for page in range(max_pages):
@@ -259,10 +259,10 @@ class Collector:
                 )
             else:
                 try:
-                    candidates, is_last = search_page(
-                        expression, str(area_id), page=page,
-                        date_from=date_from, date_to=date_to,
-                    )
+                    params = {"page": page, "date_from": date_from, "date_to": date_to}
+                    if search_fields:
+                        params["search_fields"] = search_fields
+                    candidates, is_last = search_page(expression, str(area_id), **params)
                     for rank, candidate in enumerate(candidates):
                         vacancy_id = str(candidate["id"])
                         self.database.upsert_vacancy(

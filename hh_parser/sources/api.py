@@ -99,6 +99,7 @@ class HHApiSource:
     def search_page(
         self, expression: str, area_id: str, *, page: int, per_page: int = 100,
         date_from: str | None = None, date_to: str | None = None,
+        search_fields: tuple[str, ...] = (),
     ) -> tuple[list[dict[str, Any]], bool]:
         """Fetch one documented page and report whether it is final."""
         if not 1 <= per_page <= 100:
@@ -108,6 +109,8 @@ class HHApiSource:
         if bool(date_from) != bool(date_to):
             raise ValueError("date_from and date_to must be provided together")
         params = {"text": expression, "area": area_id, "per_page": per_page, "page": page}
+        if search_fields:
+            params["search_field"] = list(search_fields)
         if date_from:
             params["date_from"] = date_from
             params["date_to"] = date_to

@@ -36,6 +36,12 @@ class Collector:
             return value.expression, {"version": value.version, "query_group": value.group, "purpose": value.purpose}
         return value, {}
 
+    @staticmethod
+    def _http_status(error: Exception) -> int | None:
+        """Extract status from requests-style transport errors."""
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        return status if isinstance(status, int) else None
+
     def collect(
         self, run_id: int, area_ids: Iterable[str], queries: Iterable[str], *,
         search: Callable[[str, str], list[dict[str, Any]]],
@@ -74,14 +80,15 @@ class Collector:
                             run_id, "search", query_id=query_id, area_id=int(area_id)
                         )
                     except Exception as error:
+                        http_status = self._http_status(error)
                         self.database.record_search_page(
                             run_id, query_id, page=0, area_id=int(area_id),
-                            error_type=type(error).__name__, error_message=str(error),
+                            http_status=http_status, error_type=type(error).__name__, error_message=str(error),
                             is_last_page=False,
                         )
                         self.database.record_error(
                             run_id, "search", type(error).__name__, str(error),
-                            query_id=query_id, area_id=int(area_id),
+                            query_id=query_id, area_id=int(area_id), http_status=http_status,
                         )
                         continue
                 for candidate in candidates:
@@ -101,6 +108,7 @@ class Collector:
                         self.database.record_error(
                             run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                             area_id=int(area_id), vacancy_hh_id=vacancy_id,
+                            http_status=self._http_status(error),
                         )
         return self._finish(run_id)
 
@@ -275,15 +283,16 @@ class Collector:
                         date_from=date_from, date_to=date_to,
                     )
                 except Exception as error:
+                    http_status = self._http_status(error)
                     self.database.record_search_page(
                         run_id, query_id, page=page, area_id=area_id,
                         date_from=date_from, date_to=date_to,
-                        error_type=type(error).__name__, error_message=str(error),
+                        http_status=http_status, error_type=type(error).__name__, error_message=str(error),
                     )
                     self.database.record_error(
                         run_id, "search", type(error).__name__, str(error),
                         query_id=query_id, area_id=area_id,
-                        date_from=date_from, date_to=date_to,
+                        date_from=date_from, date_to=date_to, http_status=http_status,
                     )
                     return False
             self._load_candidates(run_id, candidates, detail, query_id, area_id)
@@ -314,6 +323,7 @@ class Collector:
                 self.database.record_error(
                     run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                     area_id=area_id, vacancy_hh_id=vacancy_id,
+                    http_status=self._http_status(error),
                 )
 
     def _store_snapshot(self, run_id: int, vacancy_id: str, snapshot: dict[str, Any]) -> None:

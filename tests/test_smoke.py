@@ -966,6 +966,29 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(error_type, "SearchDepthSaturated")
 
+    def test_paginated_collector_persists_transport_http_status(self):
+        class Response:
+            status_code = 429
+
+        error = requests.HTTPError("HTTP 429")
+        error.response = Response()
+        run_id = Collector(self.database).start({"fixture": "http-status"}, ["1"])
+        counters = Collector(self.database).collect_paginated(
+            run_id, ["1"], ["воинский учет"],
+            search_page=lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+            detail=lambda candidate: candidate,
+        )
+
+        self.assertEqual(counters["errors"], 1)
+        with self.database.connect() as connection:
+            page = connection.execute(
+                "SELECT http_status FROM search_pages WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            recorded = connection.execute(
+                "SELECT http_status FROM collection_errors WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        self.assertEqual((page["http_status"], recorded["http_status"]), (429, 429))
+
     def test_date_window_is_persisted_and_reused_by_resume(self):
         collector = Collector(self.database)
         run_id = collector.start({"fixture": "dates"}, ["1"])

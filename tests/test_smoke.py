@@ -25,7 +25,7 @@ from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features
 from hh_parser.history import repost_key
-from hh_parser.export import export_query_hits, export_roles, export_skills, export_vacancies
+from hh_parser.export import export_marts, export_query_hits, export_roles, export_skills, export_vacancies
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
@@ -454,6 +454,29 @@ class DatabaseTests(unittest.TestCase):
             "--snapshot", "all", "--run-id", str(run_id),
         ])
         self.assertEqual(run_export_vacancies(settings), 1)
+
+    def test_mart_export_has_manifest_legacy_skills_and_scope(self):
+        run_id = self.database.start_run({"fixture": "marts"})
+        query_id = self.database.upsert_query("воинский учет", query_group="military")
+        self.database.upsert_vacancy("mart-1", source="api")
+        self.database.record_query_hit(run_id, query_id, "mart-1", area_id=1)
+        self.database.record_snapshot(run_id, "mart-1", {
+            "content_hash": "mart-hash", "title": "Воинский учет", "source": "api", "area_id": 1,
+            "published_at": "2026-07-01T00:00:00+00:00", "description_text": "Военный учет",
+        })
+        snapshot_id = self.database.snapshot_id("mart-1", "mart-hash")
+        self.database.upsert_auto_relevance(snapshot_id, "relevant", 1.0, [], "test")
+        dictionary = Path(self.temp_dir.name) / "skills.txt"
+        dictionary.write_text("воинский учет | военный учет\n", encoding="utf-8")
+        run_offline_extraction(self.database, "skills", skill_dictionary=load_skill_dictionary(dictionary))
+        output = Path(self.temp_dir.name) / "marts"
+        result = export_marts(self.database, output, area_ids=["1"], relevance="relevant")
+        self.assertTrue(Path(result["manifest"]).exists())
+        self.assertEqual(result["outputs"]["publication_trends"]["rows"], 1)
+        with (output / "top_skills_rf.csv").open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(list(csv.DictReader(handle))[0]["Skill"], "воинский учет")
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["filters"]["relevance"], "relevant")
 
     def test_stats_are_db_only_and_honor_scope_filters(self):
         run_id = self.database.start_run({"fixture": "stats"})

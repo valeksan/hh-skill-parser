@@ -57,21 +57,21 @@ version выборки/labels, filters и метрики. Фактический
 
 **DA-витрины и экспорты.**
 
-- [ ] Добавить views/exports для:
+- [x] Добавить views/exports для:
   - publication trends;
   - district/subject/locality;
   - employers, industries, edits и reposts;
   - topics/skills и co-occurrence;
   - salary, experience, employment и work format;
   - coverage/errors/missing-data/query noise.
-- [ ] Использовать effective relevance и единые filters во всех витринах.
-- [ ] Добавить export manifest: время, DB/schema version, run/config/query/
+- [x] Использовать effective relevance и единые filters во всех витринах.
+- [x] Добавить export manifest: время, DB/schema version, run/config/query/
   dictionary versions, filters, row counts и hashes файлов.
-- [ ] Добавить optional Parquet с понятной подсказкой установки `pyarrow`;
+- [x] Добавить optional Parquet с понятной подсказкой установки `pyarrow`;
   отсутствие dependency не должно ломать CSV.
-- [ ] Формировать legacy `top_skills_rf.csv` из SQLite, а не из отдельного
+- [x] Формировать legacy `top_skills_rf.csv` из SQLite, а не из отдельного
   состояния collector-а.
-- [ ] Добавить data dictionary и проверенные SQL examples.
+- [x] Добавить data dictionary и проверенные SQL examples.
 
 Приёмка:
 
@@ -79,6 +79,14 @@ version выборки/labels, filters и метрики. Фактический
 - CSV/Parquet одного scope логически эквивалентны;
 - multivalue данные имеют стабильную JSON либо нормализованную схему;
 - manifest позволяет точно повторить export.
+
+Результат: `export marts --output-dir DIR` строит CSV bundle только из SQLite;
+`--parquet` добавляет эквивалентные Parquet (optional extra `.[parquet]`). Один
+scope применяется к vacancy-derived marts; `coverage_errors` намеренно показывает
+все persisted run-level coverage/errors. `manifest.json` содержит scope, миграции,
+связанные run configs/hashes, dictionary versions, row counts и SHA-256 файлов.
+Multivalue `work_format_json` остаётся стабильным JSON; industries и skills
+нормализованы. `top_skills_rf.csv` имеет legacy колонки `Count,Skill`.
 
 ## ANA-4
 

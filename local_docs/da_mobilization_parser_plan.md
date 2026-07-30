@@ -46,7 +46,7 @@ git history.
      провести pilot-разметку и измерить качество query families.
    - [x] [ANA-2](da_mobilization_analysis_plan.md#ana-2):
      улучшить discovery и сохранять историю review.
-   - [ ] [ANA-3](da_mobilization_analysis_plan.md#ana-3):
+   - [x] [ANA-3](da_mobilization_analysis_plan.md#ana-3):
      добавить недостающие DA-витрины и воспроизводимые экспорты.
    - [ ] [ANA-4](da_mobilization_analysis_plan.md#ana-4):
      закрепить качество производных признаков golden-проверками.

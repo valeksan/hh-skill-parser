@@ -20,7 +20,7 @@ from .areas import (
 from .collector import Collector
 from .discovery import discover_skill_candidates, export_skill_candidates, import_skill_candidates
 from .extractors.offline import extract as run_extraction
-from .export import export_query_hits, export_roles, export_skills, export_vacancies
+from .export import export_marts, export_query_hits, export_roles, export_skills, export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
 from .pilot import create_pilot, export_pilot_labels, pilot_report
@@ -291,6 +291,16 @@ def build_parser() -> argparse.ArgumentParser:
     roles_export.add_argument("--output", required=True)
     query_hits_export = export_commands.add_parser("query-hits", help="export normalized query-hit CSV")
     query_hits_export.add_argument("--output", required=True)
+    marts_export = export_commands.add_parser("marts", help="export reproducible DA mart bundle from SQLite")
+    marts_export.add_argument("--output-dir", required=True)
+    marts_export.add_argument("--snapshot", choices=["latest", "all"], default="latest")
+    marts_export.add_argument("--run-id", action="append", type=int, default=[])
+    marts_export.add_argument("--area", action="append", default=[])
+    marts_export.add_argument("--relevance", choices=["relevant", "borderline", "irrelevant", "unknown"])
+    marts_export.add_argument("--query-family")
+    marts_export.add_argument("--date-from", type=parse_iso_date)
+    marts_export.add_argument("--date-to", type=parse_iso_date)
+    marts_export.add_argument("--parquet", action="store_true", help="also write Parquet; requires pyarrow")
 
     stats = commands.add_parser("stats", help="calculate DB-only vacancy statistics")
     stats.add_argument("--config")
@@ -566,6 +576,17 @@ def run_export_relation(settings: argparse.Namespace) -> int:
     return export_roles(database, settings.output) if settings.export_command == "roles" else export_query_hits(database, settings.output)
 
 
+def run_export_marts(settings: argparse.Namespace) -> dict[str, Any]:
+    validate_date_range(settings.date_from, settings.date_to)
+    database = database_for(settings)
+    database.migrate()
+    return export_marts(
+        database, settings.output_dir, snapshot_scope=settings.snapshot, run_ids=settings.run_id or None,
+        area_ids=settings.area or None, relevance=settings.relevance, query_family=settings.query_family,
+        date_from=settings.date_from, date_to=settings.date_to, parquet=settings.parquet,
+    )
+
+
 def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
     """Calculate filtered counts from SQLite only."""
     validate_date_range(settings.date_from, settings.date_to)
@@ -730,6 +751,9 @@ def main(argv: list[str] | None = None) -> None:
                 rows = run_export_vacancies(settings)
             elif settings.export_command == "skills":
                 rows = run_export_skills(settings)
+            elif settings.export_command == "marts":
+                print(json.dumps(run_export_marts(settings), ensure_ascii=False, sort_keys=True))
+                return
             else:
                 rows = run_export_relation(settings)
             print(json.dumps({"rows": rows}, ensure_ascii=False, sort_keys=True))

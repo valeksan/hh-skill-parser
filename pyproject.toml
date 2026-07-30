@@ -29,6 +29,9 @@ cli = [
 bundle = [
   "pyinstaller>=6.0.0",
 ]
+parquet = [
+  "pyarrow>=14",
+]
 full = [
   "matplotlib>=3.5.0",
   "console-animation>=0.2.7",

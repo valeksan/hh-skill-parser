@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -140,3 +143,103 @@ def _write_csv(rows: list[Any], fields: tuple[str, ...], path: str | Path) -> in
         writer.writeheader()
         writer.writerows(dict(row) for row in rows)
     return len(rows)
+
+
+def export_marts(
+    database: Database, output_dir: str | Path, *, snapshot_scope: str = "latest",
+    run_ids: list[int] | None = None, area_ids: list[str] | None = None,
+    relevance: str | None = None, query_family: str | None = None,
+    date_from: str | None = None, date_to: str | None = None, parquet: bool = False,
+) -> dict[str, Any]:
+    """Build complete offline DA mart bundle plus reproducibility manifest."""
+    if snapshot_scope not in {"latest", "all"}:
+        raise ValueError("snapshot_scope must be 'latest' or 'all'")
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    clauses, values = _scope_clauses(run_ids, area_ids, relevance, query_family, date_from, date_to)
+    source = "latest_vacancy_snapshots" if snapshot_scope == "latest" else "vacancy_snapshots"
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    selected = (
+        "SELECT DISTINCT s.*, COALESCE(labels.effective_label, 'unknown') AS effective_label "
+        f"FROM {source} s LEFT JOIN effective_relevance_labels labels ON labels.snapshot_id=s.id"
+        + (" JOIN vacancy_snapshot_observations observations ON observations.snapshot_id=s.id" if run_ids else "")
+        + where
+    )
+    marts = {
+        "publication_trends": "SELECT COALESCE(substr(published_at,1,10),substr(observed_at,1,10)) AS publication_day, effective_label, COUNT(DISTINCT vacancy_hh_id) AS vacancy_count FROM selected GROUP BY 1,2 ORDER BY 1,2",
+        "geography": "SELECT federal_district, federal_subject, locality, area_id, area_name, effective_label, COUNT(DISTINCT vacancy_hh_id) AS vacancy_count FROM selected GROUP BY 1,2,3,4,5,6 ORDER BY 1,2,3,4,6",
+        "employers": "SELECT employer_id, employer_name, employer_type, effective_label, COUNT(DISTINCT vacancy_hh_id) AS vacancy_count FROM selected GROUP BY 1,2,3,4 ORDER BY vacancy_count DESC, employer_id",
+        "industries": "SELECT json_extract(value, '$.id') AS industry_id, json_extract(value, '$.name') AS industry_name, effective_label, COUNT(DISTINCT vacancy_hh_id) AS vacancy_count FROM selected, json_each(COALESCE(industries_json, '[]')) GROUP BY 1,2,3 ORDER BY vacancy_count DESC, industry_name",
+        "topics_skills": "SELECT k.topic_family, k.canonical_name AS skill, selected.effective_label, COUNT(DISTINCT selected.vacancy_hh_id) AS vacancy_count FROM selected JOIN vacancy_skills vs ON vs.snapshot_id=selected.id JOIN skills k ON k.id=vs.skill_id GROUP BY 1,2,3 ORDER BY vacancy_count DESC, skill",
+        "skill_cooccurrence": "SELECT a.canonical_name AS skill_a, b.canonical_name AS skill_b, COUNT(DISTINCT selected.vacancy_hh_id) AS vacancy_count FROM selected JOIN vacancy_skills va ON va.snapshot_id=selected.id JOIN skills a ON a.id=va.skill_id JOIN vacancy_skills vb ON vb.snapshot_id=selected.id JOIN skills b ON b.id=vb.skill_id WHERE a.canonical_name < b.canonical_name GROUP BY 1,2 ORDER BY vacancy_count DESC, skill_a, skill_b",
+        "salary": "SELECT salary_currency, salary_frequency, salary_gross, effective_label, COUNT(*) AS vacancy_count, AVG(CASE WHEN salary_from IS NOT NULL AND salary_to IS NOT NULL THEN (salary_from+salary_to)/2.0 ELSE COALESCE(salary_from,salary_to) END) AS salary_midpoint_avg FROM selected GROUP BY 1,2,3,4 ORDER BY 1,2,3,4",
+        "employment": "SELECT experience_id, employment_id, schedule_id, work_format_json, effective_label, COUNT(DISTINCT vacancy_hh_id) AS vacancy_count FROM selected GROUP BY 1,2,3,4,5 ORDER BY vacancy_count DESC",
+        "edits": "SELECT h.history_event, COUNT(*) AS snapshot_count, COUNT(DISTINCT h.vacancy_hh_id) AS vacancy_count FROM vacancy_history h JOIN selected ON selected.id=h.id GROUP BY 1 ORDER BY 1",
+        "reposts": "SELECT g.repost_key, g.key_version, g.publication_count, g.first_observed_at, g.last_observed_at FROM repost_groups g JOIN snapshot_repost_keys k ON k.repost_key=g.repost_key AND k.key_version=g.key_version JOIN selected ON selected.id=k.snapshot_id GROUP BY 1,2,3,4,5 ORDER BY g.publication_count DESC, g.repost_key",
+        "missing_data": "SELECT 'published_at' AS field, SUM(published_at IS NULL) AS missing_count, COUNT(*) AS total_count FROM selected UNION ALL SELECT 'area_id',SUM(area_id IS NULL),COUNT(*) FROM selected UNION ALL SELECT 'salary',SUM(salary_from IS NULL AND salary_to IS NULL),COUNT(*) FROM selected UNION ALL SELECT 'employer_id',SUM(employer_id IS NULL),COUNT(*) FROM selected",
+        "query_noise": "SELECT q.query_group, q.id AS query_id, q.expression, COUNT(DISTINCT h.vacancy_hh_id) AS hit_vacancies, SUM(selected.effective_label='relevant') AS relevant_vacancies, SUM(selected.effective_label='irrelevant') AS irrelevant_vacancies FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id JOIN selected ON selected.vacancy_hh_id=h.vacancy_hh_id GROUP BY 1,2,3 ORDER BY hit_vacancies DESC, query_id",
+        "coverage_errors": "SELECT r.id AS run_id,r.status,r.found_count,r.unique_count,r.loaded_count,r.error_count,COUNT(e.id) AS persisted_errors FROM collection_runs r LEFT JOIN collection_errors e ON e.run_id=r.id GROUP BY 1,2,3,4,5,6 ORDER BY r.id",
+    }
+    outputs: dict[str, dict[str, Any]] = {}
+    with database.connect() as connection:
+        connection.execute("CREATE TEMP TABLE selected AS " + selected, values)
+        for name, query in marts.items():
+            rows = [dict(row) for row in connection.execute(query)]
+            path = directory / f"{name}.csv"
+            _write_csv(rows, tuple(rows[0]) if rows else _fields_for_query(connection, query), path)
+            item: dict[str, Any] = {"rows": len(rows), "csv": path.name, "sha256": _sha256(path)}
+            if parquet:
+                parquet_path = path.with_suffix(".parquet")
+                _write_parquet(rows, parquet_path)
+                item.update({"parquet": parquet_path.name, "parquet_sha256": _sha256(parquet_path)})
+            outputs[name] = item
+        legacy_rows = [dict(row) for row in connection.execute(
+            "SELECT COUNT(DISTINCT selected.vacancy_hh_id) AS Count, k.canonical_name AS Skill "
+            "FROM selected JOIN vacancy_skills vs ON vs.snapshot_id=selected.id "
+            "JOIN skills k ON k.id=vs.skill_id GROUP BY k.canonical_name ORDER BY Count DESC, Skill"
+        )]
+        legacy_path = directory / "top_skills_rf.csv"
+        _write_csv(legacy_rows, ("Count", "Skill"), legacy_path)
+        outputs["top_skills_rf"] = {"rows": len(legacy_rows), "csv": legacy_path.name, "sha256": _sha256(legacy_path)}
+        if parquet:
+            legacy_parquet = legacy_path.with_suffix(".parquet")
+            _write_parquet(legacy_rows, legacy_parquet)
+            outputs["top_skills_rf"].update({"parquet": legacy_parquet.name, "parquet_sha256": _sha256(legacy_parquet)})
+        schema_versions = [row["version"] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
+        dictionaries = [row["dictionary_version"] for row in connection.execute("SELECT DISTINCT dictionary_version FROM skills ORDER BY dictionary_version")]
+        runs = [dict(row) for row in connection.execute("SELECT id, config_hash, config_json FROM collection_runs WHERE id IN (SELECT DISTINCT run_id FROM vacancy_snapshot_observations WHERE snapshot_id IN (SELECT id FROM selected)) ORDER BY id")]
+    manifest = {"generated_at": datetime.now(timezone.utc).isoformat(), "database": str(database.path), "schema_versions": schema_versions, "filters": {"snapshot": snapshot_scope, "run_ids": run_ids or [], "area_ids": area_ids or [], "relevance": relevance, "query_family": query_family, "date_from": date_from, "date_to": date_to}, "runs": runs, "dictionary_versions": dictionaries, "outputs": outputs}
+    (directory / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"outputs": outputs, "manifest": str(directory / "manifest.json")}
+
+
+def _scope_clauses(run_ids: list[int] | None, area_ids: list[str] | None, relevance: str | None, query_family: str | None, date_from: str | None, date_to: str | None) -> tuple[list[str], list[Any]]:
+    clauses, values = [], []
+    if run_ids:
+        clauses.append("observations.run_id IN (" + ", ".join("?" for _ in run_ids) + ")"); values.extend(run_ids)
+    if area_ids:
+        clauses.append("CAST(s.area_id AS TEXT) IN (" + ", ".join("?" for _ in area_ids) + ")"); values.extend(area_ids)
+    if relevance: clauses.append("labels.effective_label = ?"); values.append(relevance)
+    if query_family:
+        clauses.append("EXISTS (SELECT 1 FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id WHERE h.vacancy_hh_id=s.vacancy_hh_id AND q.query_group=?)"); values.append(query_family)
+    if date_from: clauses.append("substr(s.published_at,1,10) >= ?"); values.append(date_from)
+    if date_to: clauses.append("substr(s.published_at,1,10) <= ?"); values.append(date_to)
+    return clauses, values
+
+
+def _fields_for_query(connection: Any, query: str) -> tuple[str, ...]:
+    cursor = connection.execute(query + " LIMIT 0")
+    return tuple(column[0] for column in cursor.description)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_parquet(rows: list[dict[str, Any]], path: Path) -> None:
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError as error:
+        raise ValueError("Parquet export requires pyarrow; install with: pip install -e '.[parquet]'") from error
+    pq.write_table(pa.Table.from_pylist(rows), path)

@@ -9,6 +9,7 @@ from typing import Any
 from .normalization import normalize_api_vacancy
 from .extractors.features import VERSION as FEATURES_VERSION, extract_features
 from .query_specs import QuerySpec
+from .skill_dictionary import SkillDictionary, topic_family
 from relevance import VERSION as RELEVANCE_VERSION, classify_relevance
 from .storage import Database
 
@@ -16,9 +17,14 @@ from .storage import Database
 class Collector:
     """Collect candidates before relevance decisions; persist every stage."""
 
-    def __init__(self, database: Database, *, transport: Any | None = None):
+    def __init__(self, database: Database, *, transport: Any | None = None, skill_dictionary: SkillDictionary | None = None):
         self.database = database
         self.transport = transport
+        self.skill_dictionary = skill_dictionary
+        self.skill_ids = (
+            database.sync_skill_dictionary(skill_dictionary.aliases, skill_dictionary.version, topic_family)
+            if skill_dictionary else {}
+        )
         self.loaded_ids: set[str] = set()
 
     def start(
@@ -325,6 +331,14 @@ class Collector:
         label, score, reasons = classify_relevance(snapshot["title"], snapshot.get("description_text") or "")
         self.database.upsert_auto_relevance(snapshot_id, label, score, reasons, RELEVANCE_VERSION)
         self.database.upsert_features(snapshot_id, extract_features(snapshot), FEATURES_VERSION)
+        if self.skill_dictionary:
+            matches = []
+            for source, text in (("title", snapshot.get("title") or ""), ("description", snapshot.get("description_text") or "")):
+                matches.extend((canonical, source, alias, count) for canonical, alias, count in self.skill_dictionary.matches(text))
+            for skill in snapshot.get("key_skills", []):
+                if isinstance(skill, dict) and skill.get("name"):
+                    matches.extend((canonical, "key_skill", alias, count) for canonical, alias, count in self.skill_dictionary.matches(str(skill["name"])))
+            self.database.upsert_vacancy_skills(snapshot_id, matches, self.skill_ids, self.skill_dictionary.version)
 
     def _stored_page_is_last(
         self, run_id: int, query_id: int, area_id: int, page: int,

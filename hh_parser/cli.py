@@ -20,6 +20,7 @@ from .collector import Collector
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
 from .query_specs import load_query_specs
+from .skill_dictionary import load_skill_dictionary
 from .sources.api import HHApiSource
 from .storage import Database
 
@@ -76,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--config")
     collect.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     collect.add_argument("--queries-file", default="queries.txt")
+    collect.add_argument("--skills-file", default="skills_whitelist.txt")
     collect.add_argument("--area", action="append", default=[])
     collect.add_argument("--areas-file")
     collect.add_argument("--areas-source", choices=["explicit", "catalog"], default="explicit")
@@ -96,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
     resume.add_argument("--run-id", required=True, type=int)
     resume.add_argument("--queries-file", default="queries.txt")
+    resume.add_argument("--skills-file", default="skills_whitelist.txt")
     resume.add_argument("--max-pages", type=int, default=20)
     add_transport_arguments(resume)
 
@@ -191,9 +194,11 @@ def run_collect(
         raise ValueError("date slice minimum must be positive; overlap must be non-negative")
     area_ids, catalog_version_id, selection_source = resolve_collect_areas(settings, database)
     queries = load_query_file(settings.queries_file)
+    skill_dictionary = load_skill_dictionary(settings.skills_file)
     source = source_factory(settings)
     config = {
-        "queries_file": str(settings.queries_file), "area_ids": area_ids,
+        "queries_file": str(settings.queries_file), "skills_file": str(settings.skills_file),
+        "skills_dictionary_version": skill_dictionary.version, "area_ids": area_ids,
         "catalog_version_id": catalog_version_id, "selection_source": selection_source,
         "source": settings.source, "request_timeout": settings.request_timeout,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
@@ -201,7 +206,7 @@ def run_collect(
         "date_slice_min_days": settings.date_slice_min_days,
         "date_overlap_days": settings.date_overlap_days,
     }
-    collector = Collector(database, transport=source)
+    collector = Collector(database, transport=source, skill_dictionary=skill_dictionary)
     run_id = collector.start(
         config, area_ids, catalog_version_id=catalog_version_id,
         selection_source=selection_source, source_policy=settings.source,
@@ -230,8 +235,9 @@ def run_resume(
     database.migrate()
     config = database.run_config(settings.run_id)
     source = source_factory(settings)
+    skill_dictionary = load_skill_dictionary(settings.skills_file)
     if config.get("date_from"):
-        return Collector(database, transport=source).resume_sliced(
+        return Collector(database, transport=source, skill_dictionary=skill_dictionary).resume_sliced(
             settings.run_id, load_query_file(settings.queries_file),
             search_page=source.search_page, detail=source.detail,
             max_pages=config.get("max_pages", settings.max_pages),
@@ -239,7 +245,7 @@ def run_resume(
             min_window_days=config.get("date_slice_min_days", 1),
             overlap_days=config.get("date_overlap_days", 1),
         )
-    return Collector(database, transport=source).resume_paginated(
+    return Collector(database, transport=source, skill_dictionary=skill_dictionary).resume_paginated(
         settings.run_id, load_query_file(settings.queries_file),
         search_page=source.search_page, detail=source.detail,
         max_pages=config.get("max_pages", settings.max_pages),

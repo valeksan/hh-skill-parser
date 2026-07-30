@@ -27,6 +27,7 @@ from hh_parser.cli import (
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
 from hh_parser.query_specs import load_query_specs
+from hh_parser.skill_dictionary import load_skill_dictionary
 from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
 
@@ -317,7 +318,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql"],
         )
         self.assertTrue(
             {
@@ -325,6 +326,7 @@ class DatabaseTests(unittest.TestCase):
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
                 "snapshot_key_skills", "snapshot_roles", "snapshot_industries",
                 "features",
+                "skills", "skill_aliases", "vacancy_skills",
             }.issubset(tables)
         )
 
@@ -420,6 +422,34 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["salary.midpoint"]["value_number"], 110000)
         self.assertEqual(features["work.remote"]["value_number"], 1)
         self.assertIn("бронирован", features["topic.reservation"]["value_json"])
+
+    def test_collector_stores_versioned_skill_evidence(self):
+        skills_path = Path(self.temp_dir.name) / "skills.txt"
+        skills_path.write_text("воинский учет | военный учет\nбронирование\n", encoding="utf-8")
+        collector = Collector(self.database, skill_dictionary=load_skill_dictionary(skills_path))
+        run_id = collector.start({"fixture": "skills"}, ["1"])
+        collector.collect(
+            run_id, ["1"], ["воинский учет"],
+            search=lambda *_: [{"id": "123", "name": "Военный учет", "_source": "api"}],
+            detail=lambda _: {
+                "id": "123", "name": "Военный учет", "description": "Воинский учет и бронирование",
+                "key_skills": [{"name": "Бронирование"}],
+            },
+        )
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT s.canonical_name, v.source, v.matched_alias, v.match_count "
+                "FROM vacancy_skills v JOIN skills s ON s.id=v.skill_id ORDER BY s.canonical_name, v.source"
+            ).fetchall()
+        self.assertEqual(
+            [tuple(row) for row in rows],
+            [
+                ("бронирование", "description", "бронирование", 1),
+                ("бронирование", "key_skill", "бронирование", 1),
+                ("воинский учет", "description", "воинский учет", 1),
+                ("воинский учет", "title", "военный учет", 1),
+            ],
+        )
 
     def test_collector_resumes_after_card_interruption_without_repeating_search_or_loaded_card(self):
         collector = Collector(self.database)

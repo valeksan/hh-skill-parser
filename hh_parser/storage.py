@@ -359,6 +359,45 @@ class Database:
                      version, utc_now()),
                 )
 
+    def sync_skill_dictionary(self, aliases: dict[str, str], version: str, topic_for: Any) -> dict[str, int]:
+        """Persist canonical skills and reject alias reassignment across versions."""
+        with self.transaction() as tx:
+            ids: dict[str, int] = {}
+            for canonical in sorted(set(aliases.values())):
+                row = tx.execute(
+                    "INSERT INTO skills(canonical_name, topic_family, dictionary_version) VALUES (?, ?, ?) "
+                    "ON CONFLICT(canonical_name, dictionary_version) DO UPDATE SET topic_family=excluded.topic_family "
+                    "RETURNING id",
+                    (canonical, topic_for(canonical), version),
+                ).fetchone()
+                ids[canonical] = int(row["id"])
+            for alias, canonical in aliases.items():
+                row = tx.execute(
+                    "SELECT s.canonical_name FROM skill_aliases a JOIN skills s ON s.id=a.skill_id "
+                    "WHERE a.alias_normalized = ?", (alias,),
+                ).fetchone()
+                if row is not None and row["canonical_name"] != canonical:
+                    raise ValueError(f"skill alias {alias!r} conflicts with existing dictionary")
+                tx.execute(
+                    "INSERT INTO skill_aliases(skill_id, alias_normalized) VALUES (?, ?) "
+                    "ON CONFLICT(alias_normalized) DO UPDATE SET skill_id=excluded.skill_id",
+                    (ids[canonical], alias),
+                )
+        return ids
+
+    def upsert_vacancy_skills(
+        self, snapshot_id: int, matches: list[tuple[str, str, str, int]], skill_ids: dict[str, int], version: str,
+    ) -> None:
+        """Persist every deterministic skill-evidence source for one snapshot."""
+        with self.transaction() as tx:
+            tx.execute("DELETE FROM vacancy_skills WHERE snapshot_id = ? AND extractor_version = ?", (snapshot_id, version))
+            for canonical, source, alias, count in matches:
+                tx.execute(
+                    "INSERT INTO vacancy_skills(snapshot_id, skill_id, source, matched_alias, match_count, evidence_json, extractor_version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (snapshot_id, skill_ids[canonical], source, alias, count, json_value([alias]), version),
+                )
+
     @staticmethod
     def _store_snapshot_links(
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],

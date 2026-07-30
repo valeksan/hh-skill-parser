@@ -23,6 +23,7 @@ from hh_parser.collector import Collector, split_date_window
 from hh_parser.cli import apply_defaults, build_parser as build_research_parser, run_collect, run_resume
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.query_specs import load_query_specs
+from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
 
 
@@ -319,7 +320,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql"],
         )
         self.assertTrue(
             {
@@ -808,6 +809,11 @@ class ConfigTests(unittest.TestCase):
             specs = load_query_specs(path)
         self.assertEqual(specs[0].expression, "мобилизац*")
         self.assertEqual(specs[0].version, "v2")
+
+    def test_relevance_is_explainable_and_keeps_uncertain_candidates(self):
+        self.assertEqual(classify_relevance("Специалист", "Воинский учет сотрудников")[0], "relevant")
+        label, score, reasons = classify_relevance("Специалист", "Документооборот")
+        self.assertEqual((label, score, reasons), ("borderline", 0.0, []))
 
 
 class AreaTests(unittest.TestCase):

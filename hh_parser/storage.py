@@ -314,6 +314,27 @@ class Database:
         with self.transaction() as tx:
             return store(tx)
 
+    def snapshot_id(self, vacancy_hh_id: str | int, content_hash: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM vacancy_snapshots WHERE vacancy_hh_id = ? AND content_hash = ?",
+                (str(vacancy_hh_id), content_hash),
+            ).fetchone()
+        if row is None:
+            raise ValueError("stored snapshot is missing")
+        return int(row["id"])
+
+    def upsert_auto_relevance(self, snapshot_id: int, label: str, score: float, reasons: list[str], version: str) -> None:
+        """Refresh automatic label without overwriting manual review fields."""
+        with self.transaction() as tx:
+            tx.execute(
+                "INSERT INTO relevance_labels(snapshot_id, label, score, reasons_json, classifier_version, calculated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(snapshot_id) DO UPDATE SET "
+                "label=excluded.label, score=excluded.score, reasons_json=excluded.reasons_json, "
+                "classifier_version=excluded.classifier_version, calculated_at=excluded.calculated_at",
+                (snapshot_id, label, score, json_value(reasons), version, utc_now()),
+            )
+
     @staticmethod
     def _store_snapshot_links(
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],

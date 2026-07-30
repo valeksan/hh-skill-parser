@@ -8,6 +8,7 @@ from typing import Any
 
 from .normalization import normalize_api_vacancy
 from .query_specs import QuerySpec
+from relevance import VERSION as RELEVANCE_VERSION, classify_relevance
 from .storage import Database
 
 
@@ -306,7 +307,12 @@ class Collector:
                 continue
             self.loaded_ids.add(vacancy_id)
             try:
-                self.database.record_snapshot(run_id, vacancy_id, normalize_api_vacancy(detail(candidate)))
+                snapshot = normalize_api_vacancy(detail(candidate))
+                self.database.record_snapshot(run_id, vacancy_id, snapshot)
+                label, score, reasons = classify_relevance(snapshot["title"], snapshot.get("description_text") or "")
+                self.database.upsert_auto_relevance(
+                    self.database.snapshot_id(vacancy_id, snapshot["content_hash"]), label, score, reasons, RELEVANCE_VERSION,
+                )
                 self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
             except Exception as error:
                 self.loaded_ids.discard(vacancy_id)

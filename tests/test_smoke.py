@@ -20,7 +20,7 @@ from hh_parser.areas import (
 )
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
-from hh_parser.extractors.features import extract_features
+from hh_parser.extractors.features import extract_features, repost_fingerprint
 from hh_parser.export import export_vacancies
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
@@ -558,6 +558,30 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["publication.week"]["value_text"], "2026-W27")
         self.assertEqual(features["publication.age_days"]["value_number"], 3)
         self.assertEqual(features["salary.monthly_rub"]["value_number"], 110000)
+
+    def test_offline_features_detect_repost_by_title_employer_and_text(self):
+        run_id = self.database.start_run({"fixture": "repost"})
+        snapshots = []
+        for vacancy_id in ("repost-1", "repost-2"):
+            self.database.upsert_vacancy(vacancy_id, source="api")
+            snapshot = {
+                "content_hash": f"repost-{vacancy_id}", "title": "Специалист по воинскому учету",
+                "description_text": "Ведение воинского учета сотрудников.", "employer_id": "42",
+                "employer_name": "АО Пример", "source": "api",
+            }
+            self.database.record_snapshot(run_id, vacancy_id, snapshot)
+            snapshots.append(snapshot)
+        self.assertEqual(repost_fingerprint(snapshots[0]), repost_fingerprint(snapshots[1]))
+        run_offline_extraction(self.database, "features")
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT name, value_number FROM features WHERE name IN ('duplicate.repost_count', 'duplicate.is_repost') "
+                "ORDER BY snapshot_id, name"
+            ).fetchall()
+        self.assertEqual([tuple(row) for row in rows], [
+            ("duplicate.is_repost", 1.0), ("duplicate.repost_count", 2.0),
+            ("duplicate.is_repost", 1.0), ("duplicate.repost_count", 2.0),
+        ])
 
     def test_offline_skill_extraction_stores_versioned_evidence(self):
         skills_path = Path(self.temp_dir.name) / "skills.txt"

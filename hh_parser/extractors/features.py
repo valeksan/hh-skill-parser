@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 
-VERSION = "2"
+VERSION = "3"
 
 TOPICS = {
     "mobilization": (r"мобилизац",),
@@ -52,7 +54,19 @@ def _parse_iso_time(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc)
 
 
-def extract_features(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+def _normalized_text(value: Any) -> str:
+    return re.sub(r"\W+", " ", str(value or "").casefold().replace("ё", "е")).strip()
+
+
+def repost_fingerprint(snapshot: dict[str, Any]) -> str:
+    """Stable non-reversible key: normalized title + employer + sanitized text hash."""
+    description_hash = hashlib.sha256(_normalized_text(snapshot.get("description_text")).encode("utf-8")).hexdigest()
+    employer = str(snapshot.get("employer_id") or _normalized_text(snapshot.get("employer_name")))
+    key = {"title": _normalized_text(snapshot.get("title")), "employer": employer, "description": description_hash}
+    return hashlib.sha256(json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def extract_features(snapshot: dict[str, Any], *, repost_count: int = 1) -> list[dict[str, Any]]:
     """Return stable topic, text, salary, publication, and job-condition features."""
     title = snapshot.get("title") or ""
     description = snapshot.get("description_text") or ""
@@ -62,6 +76,9 @@ def extract_features(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         _feature("description.present", "boolean", bool(description)),
         _feature("salary.present", "boolean", snapshot.get("salary_from") is not None or snapshot.get("salary_to") is not None),
         _feature("work.remote", "boolean", any("удален" in str(item.get("name", "")).casefold() or "remote" in str(item.get("id", "")).casefold() for item in snapshot.get("work_formats", []))),
+        _feature("duplicate.repost_fingerprint", "text", repost_fingerprint(snapshot)),
+        _feature("duplicate.repost_count", "number", repost_count),
+        _feature("duplicate.is_repost", "boolean", repost_count > 1),
     ]
     for name, patterns in TOPICS.items():
         evidence = [pattern for pattern in patterns if re.search(pattern, text)]

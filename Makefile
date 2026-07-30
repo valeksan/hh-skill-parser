@@ -7,8 +7,11 @@ BINARY_NAME ?= hh-skill-parser
 .PHONY: help \
 	install install-full install-chart install-cli install-bundle \
 	run run-html run-lite run-key-skills \
-	collect resume areas-sync db-check db-checkpoint db-backup db-restore \
-	smoke \
+	collect resume retry coverage areas-sync areas-validate \
+	extract-relevance extract-features extract-skills \
+	export-vacancies export-skills export-marts stats \
+	labeling-export labeling-import pilot-create pilot-report discover-skills import-skill-candidates \
+	db-check db-checkpoint db-backup db-restore test smoke \
 	bundle \
 	clean
 
@@ -19,8 +22,10 @@ help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  run/p'
 	@printf "\nCollection / DB\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  collect/p;/^  resume/p;/^  areas-sync/p;/^  db-/p'
-	@printf "\nTest\n"
-	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  smoke/p'
+	@printf "\nOffline processing / export\n"
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  extract-/p;/^  export-/p;/^  stats/p;/^  labeling-/p;/^  pilot-/p;/^  discover-/p;/^  import-/p;/^  retry/p;/^  coverage/p;/^  areas-validate/p'
+	@printf "\nTest / live smoke\n"
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  test/p;/^  smoke/p'
 	@printf "\nBuild\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sed -n '/^  bundle/p'
 	@printf "\nMaintenance\n"
@@ -59,8 +64,56 @@ collect: ## Start DB-backed collection (pass AREAS='--area 1 --area 2')
 resume: ## Resume DB-backed collection (pass RUN_ID=123)
 	$(PYTHON) -m hh_parser.cli resume --run-id $(RUN_ID)
 
+retry: ## Retry unresolved units in a run (pass RUN_ID=123)
+	$(PYTHON) -m hh_parser.cli retry --run-id $(RUN_ID)
+
+coverage: ## Report persisted run coverage without network (pass RUN_ID=123)
+	$(PYTHON) -m hh_parser.cli coverage --run-id $(RUN_ID)
+
 areas-sync: ## Fetch versioned HH area catalog
 	$(PYTHON) -m hh_parser.cli areas sync
+
+areas-validate: ## Validate AREAS against stored catalog (pass AREAS='--area 1')
+	$(PYTHON) -m hh_parser.cli areas validate $(AREAS)
+
+extract-relevance: ## Rebuild relevance labels from SQLite
+	$(PYTHON) -m hh_parser.cli extract relevance
+
+extract-features: ## Rebuild derived features from SQLite
+	$(PYTHON) -m hh_parser.cli extract features
+
+extract-skills: ## Rebuild skills from SQLite (pass SKILLS_FILE=path)
+	$(PYTHON) -m hh_parser.cli extract --skills-file $(or $(SKILLS_FILE),skills_whitelist.txt) skills
+
+export-vacancies: ## Export latest vacancy CSV (pass OUTPUT=vacancies.csv)
+	$(PYTHON) -m hh_parser.cli export vacancies --output $(OUTPUT)
+
+export-skills: ## Export normalized skill CSV (pass OUTPUT=vacancy_skills.csv)
+	$(PYTHON) -m hh_parser.cli export skills --output $(OUTPUT)
+
+export-marts: ## Export DA marts + manifest (pass OUTPUT_DIR=marts)
+	$(PYTHON) -m hh_parser.cli export marts --output-dir $(OUTPUT_DIR)
+
+stats: ## Print offline vacancy statistics
+	$(PYTHON) -m hh_parser.cli stats
+
+labeling-export: ## Export relevance labeling CSV (pass OUTPUT=labels.csv)
+	$(PYTHON) -m hh_parser.cli export labeling --output $(OUTPUT)
+
+labeling-import: ## Import reviewed labeling CSV (pass INPUT=labels.csv)
+	$(PYTHON) -m hh_parser.cli import labeling $(INPUT)
+
+pilot-create: ## Create fixed labeling pilot (pass BATCH_ID=id OUTPUT=pilot.csv)
+	$(PYTHON) -m hh_parser.cli pilot create --batch-id $(BATCH_ID) --output $(OUTPUT)
+
+pilot-report: ## Write offline pilot metrics (pass BATCH_ID=id OUTPUT=report.json)
+	$(PYTHON) -m hh_parser.cli pilot report --batch-id $(BATCH_ID) --output $(OUTPUT)
+
+discover-skills: ## Export skill candidates (pass OUTPUT=candidates.csv)
+	$(PYTHON) -m hh_parser.cli discover skills --output $(OUTPUT)
+
+import-skill-candidates: ## Apply review to new dictionary (pass INPUT=... SKILLS_FILE=... OUTPUT=...)
+	$(PYTHON) -m hh_parser.cli import skill-candidates $(INPUT) --skills-file $(SKILLS_FILE) --output $(OUTPUT)
 
 db-check: ## Run SQLite integrity check (pass DATABASE=path)
 	$(PYTHON) -m hh_parser.cli db --database $(or $(DATABASE),hh_mobilization.sqlite3) check
@@ -74,8 +127,11 @@ db-backup: ## Create verified backup (pass DATABASE=path BACKUP=path)
 db-restore: ## Restore backup separately (pass BACKUP=path RESTORE=path)
 	$(PYTHON) -m hh_parser.cli db restore --input $(BACKUP) --output $(RESTORE)
 
-smoke: ## Run local smoke tests
+test: ## Run deterministic local test discovery
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v
+
+smoke: ## Run opt-in live HH smoke (pass SMOKE_ARGS='--confirm-live --area 1')
+	$(PYTHON) -m hh_parser.cli smoke live $(SMOKE_ARGS)
 
 bundle: ## Build a one-file binary into dist/
 	@if ! command -v $(PYINSTALLER) >/dev/null 2>&1; then \

@@ -56,7 +56,7 @@ git history.
      закрыть сквозные/golden сценарии.
    - [x] [REL-2](da_mobilization_release_plan.md#rel-2):
      добавить backup/restore и контролируемый live smoke.
-   - [ ] [REL-3](da_mobilization_release_plan.md#rel-3):
+   - [x] [REL-3](da_mobilization_release_plan.md#rel-3):
      синхронизировать документацию с финальным workflow.
 
 ## Ближайшая итерация

@@ -1,9 +1,12 @@
 # HH Mobilization Skills Research
 
-Ветка `da-mob`: сбор и анализ навыков из вакансий, связанных с мобилизационной подготовкой, воинским учётом, бронированием, ГО/ЧС и режимно-секретной работой.
+Сбор и анализ вакансий, связанных с мобилизационной подготовкой, воинским
+учётом, бронированием, ГО/ЧС и режимно-секретной работой.
 
-Основной сбор выполняется через публичный JSON API HH.ru и сохраняется в SQLite.
-Legacy `parse_skills.py` остаётся для одиночного CSV-режима.
+Основной workflow — package CLI `hh-skill-parser`: публичный JSON API HH.ru →
+SQLite → offline processing → exports. SQLite — source of truth. `parse_skills.py`
+— отдельный legacy CSV workflow; его source/fallback/filter семантика не равна
+package CLI и результаты не смешиваются.
 
 ## Установка
 
@@ -13,10 +16,12 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Для быстрой локальной проверки:
+Для детерминированной локальной проверки без сети:
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+# same command through Makefile:
+make test
 ```
 
 ## Запуск
@@ -46,12 +51,13 @@ hh-skill-parser collect --collection-mode full --area 1 --date-from 2025-01-01 -
 
 # Производные данные строятся отдельно, только из SQLite, без запросов к HH.
 hh-skill-parser extract relevance
-hh-skill-parser extract features --snapshot all
+hh-skill-parser extract --snapshot all features
 hh-skill-parser extract --skills-file skills_whitelist.txt skills
 
 # Аналитический CSV только из SQLite. Сеть/extract не запускаются.
 hh-skill-parser export vacancies --output vacancies.csv --snapshot latest --relevance relevant
 hh-skill-parser export skills --output vacancy_skills.csv
+hh-skill-parser export marts --output-dir marts --relevance relevant
 
 # ANA-1: fixed 100-row pilot, then manually fill labels and import CSV.
 hh-skill-parser pilot create --batch-id 2026-07-30-v1 --output pilot.csv
@@ -78,6 +84,96 @@ watermark.
 только по сохранённому batch и manual labels. `unknown`/blank не входят в binary metrics.
 HTML anti-bot/interstitial страница сохраняется как ошибка run, не как вакансия.
 
+## Первый запуск, resume и coverage
+
+`areas sync` требует сети и создаёт versioned catalog. После этого выберите
+explicit IDs либо catalog selection; collect сохраняет query specs, areas и
+catalog version в run. Первый `incremental` использует `--date-from` как нижнюю
+границу (либо только today); успешный run двигает watermark. Повторный
+incremental читает compatible watermark с overlap. `full` требует обе даты,
+историю не удаляет и watermark не меняет.
+
+Если процесс оборвался, не запускайте новый collect для того же scope:
+
+```bash
+hh-skill-parser resume --run-id 42
+hh-skill-parser coverage --run-id 42
+hh-skill-parser retry --run-id 42 --max-attempts 3
+hh-skill-parser coverage --run-id 42
+```
+
+`coverage` читает persisted search/card units, сеть не вызывает. `completed`
+означает обработанные units, не полноту всех результатов HH: API pagination
+ограничена `--max-pages`, насыщенные интервалы режутся до
+`--date-slice-min-days`, а failed/saturated/missing cards остаются видимыми в
+coverage и errors. `degraded`/partial run нельзя считать полным корпусом.
+
+## Offline reprocessing и review
+
+Все эти команды читают SQLite, не меняют collection counters/status и не ходят
+в HH. После изменения extractor, dictionary или ручных labels можно безопасно
+повторить их на том же corpus:
+
+```bash
+hh-skill-parser extract relevance
+hh-skill-parser extract --snapshot all features
+hh-skill-parser extract --skills-file skills_whitelist.txt skills
+
+# Manual relevance review.
+hh-skill-parser export labeling --output labels.csv --sample-size 100 --sample-seed 20260730
+# Fill only supported label/reason columns, then:
+hh-skill-parser import labeling labels.csv
+
+# Fixed pilot: selection and filters persist in SQLite; report is reproducible.
+hh-skill-parser pilot create --batch-id 2026-07-30-v1 --output pilot.csv
+hh-skill-parser import labeling pilot.csv
+hh-skill-parser pilot report --batch-id 2026-07-30-v1 --output pilot-report.json
+```
+
+Skill discovery is review-first: command exports evidence, never mutates current
+dictionary. `approve|reject|merge` decisions produce a new dictionary only.
+
+```bash
+hh-skill-parser discover skills --batch-id review-2026-07 --output skill_candidates.csv
+hh-skill-parser import skill-candidates skill_candidates.csv \
+  --skills-file skills_whitelist.txt --output skills_whitelist.v2.txt --batch-id review-2026-07
+hh-skill-parser extract --skills-file skills_whitelist.v2.txt skills
+```
+
+## DA marts, manifest и data dictionary
+
+`export marts` создаёт CSV bundle только из SQLite. `manifest.json` фиксирует
+время генерации, DB path, migrations, filters, contributing runs/config hashes,
+dictionary versions, row counts и SHA-256 каждого output. Сохраняйте manifest
+вместе с отчётом; повторяйте export с теми же filters для сравнения.
+
+```bash
+# Relevant latest snapshots for one run/area/query family.
+hh-skill-parser export marts --output-dir marts-42 --run-id 42 --area 1 \
+  --relevance relevant --query-family military
+
+# SQL examples against SQLite DB.
+sqlite3 hh_mobilization.sqlite3 \
+  "SELECT publication_day, vacancy_count FROM publication_time_series ORDER BY publication_day;"
+sqlite3 hh_mobilization.sqlite3 \
+  "SELECT q.query_group, COUNT(DISTINCT h.vacancy_hh_id) AS hits FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id GROUP BY q.query_group ORDER BY hits DESC;"
+```
+
+| Object | Meaning |
+| --- | --- |
+| `collection_runs` | Frozen collection scope, status, counters, config hash. |
+| `vacancy_query_hits` | Search hit before card load; evidence for recall/coverage. |
+| `vacancy_snapshots` | Redacted normalized vacancy versions; latest view selects current one. |
+| `effective_relevance_labels` | Manual label if present, otherwise automatic label. |
+| `vacancy_skills` / `vacancy_skill_matrix` | Dictionary/extractor evidence for normalized skills. |
+| `vacancy_history`, `repost_groups` | Observed edits, archive state, potential repost grouping. |
+| Reporting views / marts CSV | Derived reporting datasets; not collection source. |
+
+Marts include publication trends, geography, employers, industries, topics and
+skills, skill co-occurrence, salary, employment, edits, reposts, missing data,
+query noise and persisted coverage errors. `top_skills_rf.csv` in mart bundle is
+SQLite-derived compatibility export.
+
 Регулярный запуск: incremental ежедневно/по расписанию внешним scheduler; full —
 отдельно, периодически, с явным historical range. Встроенного scheduler нет:
 
@@ -102,15 +198,6 @@ hh-skill-parser collect --config config.toml --areas-file areas.txt
 `#` и inline comment разрешены. Пример — `areas.example.txt`. Перед первым
 сбором каталог должен быть сохранён через `areas sync`; collection фиксирует
 его version в run и `resume` не обновляет scope.
-
-Skill discovery review создаёт новый dictionary file, исходный не меняет:
-
-```bash
-hh-skill-parser discover skills --batch-id review-2026-07 --output skill_candidates.csv
-# Заполнить decision: approve|reject|merge, затем:
-hh-skill-parser import skill-candidates skill_candidates.csv \
-  --skills-file skills_whitelist.txt --output skills_whitelist.v2.txt --batch-id review-2026-07
-```
 
 ## Очистка raw payload
 
@@ -180,7 +267,14 @@ hh-skill-parser db --database hh_mobilization.sqlite3 reset --yes
 hh-skill-parser db --database hh_mobilization.sqlite3 check
 ```
 
-## Команды `parse_skills.py`
+## Legacy `parse_skills.py`
+
+Этот pipeline оставлен только для existing single-run CSV/chart use cases.
+Он читает `queries.txt`, имеет legacy exact-title filter и может использовать
+`auto` API→HTML fallback. Package CLI читает `query_specs.toml`, сохраняет every
+hit before card, не делает title-only rejection и требует явный `--source html`;
+никакого API→HTML fallback в нём нет. Не используйте legacy CSV как input для
+SQLite workflow и не интерпретируйте package exports как legacy results.
 
 ```bash
 # Показать справку; пустой вызов делает то же самое
@@ -198,6 +292,11 @@ python parse_skills.py chart --chart-input top_skills_rf.csv -o top_skills_rf.pn
 ```bash
 pip install -e ".[chart]"
 ```
+
+Решение по удалению legacy: оставить до завершения следующего регулярного
+отчётного цикла на SQLite-derived `marts/top_skills_rf.csv`. Затем удалить
+legacy pipeline отдельным change после подтверждения, что CSV/chart consumers
+перешли на mart export; этот change не входит в текущий release.
 
 ## Входные файлы
 

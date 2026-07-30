@@ -1,4 +1,5 @@
-# Copy to config.toml. CLI overrides env; env overrides this file.
+# Copy to config.toml. Applies to DB-backed collect/resume/retry commands.
+# CLI overrides env; env overrides this file. Never commit real access_token.
 
 [hh]
 # access_token = ""
@@ -29,3 +30,5 @@
 
 [search]
 # queries_file = "query_specs.toml"
+
+# `parse_skills.py` does not read this file. It is separate legacy CSV pipeline.

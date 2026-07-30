@@ -50,15 +50,15 @@
 
 **Пользовательская документация.**
 
-- [ ] Синхронизировать README, `config.example.toml`, Makefile и `--help` со всеми
+- [x] Синхронизировать README, `config.example.toml`, Makefile и `--help` со всеми
   завершёнными COL/ANA задачами.
-- [ ] Исправить локальную test-команду на реально работающий discovery-вызов.
-- [ ] Описать первый запуск, resume, offline reprocessing, labeling review,
+- [x] Исправить локальную test-команду на реально работающий discovery-вызов.
+- [x] Описать первый запуск, resume, offline reprocessing, labeling review,
   discovery review, export manifest и recovery.
-- [ ] Добавить data dictionary, примеры DA-запросов и объяснение coverage limits.
-- [ ] Явно разделить package DB workflow и legacy `parse_skills.py`; не смешивать
+- [x] Добавить data dictionary, примеры DA-запросов и объяснение coverage limits.
+- [x] Явно разделить package DB workflow и legacy `parse_skills.py`; не смешивать
   их source/fallback semantics.
-- [ ] После SQLite-derived legacy export принять отдельное решение о сроке
+- [x] После SQLite-derived legacy export принять отдельное решение о сроке
   удаления legacy pipeline.
 
 Приёмка:

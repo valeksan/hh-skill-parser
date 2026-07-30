@@ -323,7 +323,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql"],
         )
         self.assertTrue(
             {
@@ -1033,6 +1033,33 @@ class DatabaseTests(unittest.TestCase):
 
 
 class NormalizationTests(unittest.TestCase):
+    def test_api_normalization_converts_source_timestamps_to_utc_and_keeps_offsets(self):
+        snapshot = normalize_api_vacancy({
+            "id": "1", "name": "Специалист",
+            "published_at": "2026-07-01T00:30:00+03:00",
+            "created_at": "2026-06-30T23:00:00-04:00",
+            "expires_at": "2026-08-01T00:00:00Z",
+        })
+
+        self.assertEqual(snapshot["published_at"], "2026-06-30T21:30:00+00:00")
+        self.assertEqual(snapshot["published_at_source_offset"], "+03:00")
+        self.assertEqual(snapshot["created_at"], "2026-07-01T03:00:00+00:00")
+        self.assertEqual(snapshot["created_at_source_offset"], "-04:00")
+        self.assertEqual(snapshot["expires_at_source_offset"], "+00:00")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = database.start_run({"fixture": "timestamps"})
+            database.upsert_vacancy("1", source="api")
+            database.record_snapshot(run_id, "1", snapshot)
+            with database.connect() as connection:
+                stored = connection.execute(
+                    "SELECT published_at, published_at_source_offset, created_at_source_offset "
+                    "FROM vacancy_snapshots"
+                ).fetchone()
+        self.assertEqual(tuple(stored), ("2026-06-30T21:30:00+00:00", "+03:00", "-04:00"))
+
     def test_api_normalization_redacts_contacts_and_exact_location_before_compression(self):
         snapshot = normalize_api_vacancy({
             "id": "1", "name": "Специалист", "description": "Пишите user@example.com или +7 (999) 123-45-67",

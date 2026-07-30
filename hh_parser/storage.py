@@ -259,8 +259,9 @@ class Database:
         values = (
             str(vacancy_hh_id), run_id, observed_at,
             snapshot["content_hash"], snapshot["title"], snapshot.get("description_html"),
-            snapshot.get("description_text"), snapshot.get("published_at"), snapshot.get("created_at"),
-            snapshot.get("expires_at"), snapshot.get("archived"), snapshot.get("employer_id"),
+            snapshot.get("description_text"), snapshot.get("published_at"), snapshot.get("published_at_source_offset"),
+            snapshot.get("created_at"), snapshot.get("created_at_source_offset"), snapshot.get("expires_at"),
+            snapshot.get("expires_at_source_offset"), snapshot.get("archived"), snapshot.get("employer_id"),
             snapshot.get("employer_name"), snapshot.get("area_id"), snapshot.get("area_name"),
             snapshot.get("federal_district"), snapshot.get("federal_subject"), snapshot.get("locality"),
             snapshot.get("salary_from"), snapshot.get("salary_to"), snapshot.get("salary_currency"),
@@ -280,14 +281,15 @@ class Database:
         )
         sql = (
             "INSERT INTO vacancy_snapshots(vacancy_hh_id, run_id, observed_at, content_hash, title, description_html, "
-            "description_text, published_at, created_at, expires_at, archived, employer_id, employer_name, area_id, "
+            "description_text, published_at, published_at_source_offset, created_at, created_at_source_offset, "
+            "expires_at, expires_at_source_offset, archived, employer_id, employer_name, area_id, "
             "area_name, federal_district, federal_subject, locality, salary_from, salary_to, salary_currency, salary_gross, "
             "salary_frequency, source, completeness_json, raw_payload, raw_content_type, raw_compression, raw_size, raw_hash, "
             "redaction_applied, redaction_version, redaction_types_json, last_seen_at, employer_type, "
             "employer_trusted, employer_accredited_it, experience_id, employment_id, schedule_id, "
             "work_format_json, roles_json, industries_json, key_skills_json, languages_json, department_id, "
             "department_name, vacancy_type_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(vacancy_hh_id, content_hash) DO NOTHING"
         )
         def store(tx: sqlite3.Connection) -> bool:

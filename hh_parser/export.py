@@ -11,7 +11,8 @@ from .storage import Database
 
 VACANCY_FIELDS = (
     "snapshot_id", "hh_id", "observed_at", "last_seen_at", "source", "title",
-    "description", "published_at", "created_at", "expires_at", "archived",
+    "description", "published_at", "published_at_source_offset", "created_at",
+    "created_at_source_offset", "expires_at", "expires_at_source_offset", "archived",
     "employer_id", "employer_name", "employer_type", "area_id", "area_name",
     "federal_district", "federal_subject", "locality", "salary_from", "salary_to",
     "salary_currency", "salary_gross", "salary_frequency", "experience_id",
@@ -69,7 +70,8 @@ def export_vacancies(
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     query = (
         "SELECT DISTINCT s.id AS snapshot_id, s.vacancy_hh_id AS hh_id, s.observed_at, s.last_seen_at, s.source, "
-        "s.title, s.description_text AS description, s.published_at, s.created_at, s.expires_at, s.archived, "
+        "s.title, s.description_text AS description, s.published_at, s.published_at_source_offset, "
+        "s.created_at, s.created_at_source_offset, s.expires_at, s.expires_at_source_offset, s.archived, "
         "s.employer_id, s.employer_name, s.employer_type, s.area_id, s.area_name, s.federal_district, "
         "s.federal_subject, s.locality, s.salary_from, s.salary_to, s.salary_currency, s.salary_gross, "
         "s.salary_frequency, s.experience_id, s.employment_id, s.schedule_id, s.work_format_json AS work_formats, "

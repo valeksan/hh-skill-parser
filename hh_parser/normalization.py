@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -98,6 +99,21 @@ def _field_status(value: Any, source: str, *, empty_reason: str = "not_provided_
     }
 
 
+def normalize_iso_timestamp(value: Any) -> tuple[str | None, str | None]:
+    """Convert offset-bearing ISO 8601 time to UTC plus original numeric offset."""
+    if not isinstance(value, str) or not value:
+        return None, None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None, None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None, None
+    offset = parsed.strftime("%z")
+    offset = f"{offset[:3]}:{offset[3:]}"
+    return parsed.astimezone(timezone.utc).isoformat(), offset
+
+
 def _snapshot(
     data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None
 ) -> dict[str, Any]:
@@ -121,11 +137,14 @@ def _snapshot(
     key_skills = _public_list(data.get("key_skills"))
     languages = _public_list(data.get("languages"))
     department = data.get("department") or {}
+    published_at, published_offset = normalize_iso_timestamp(data.get("published_at"))
+    created_at, created_offset = normalize_iso_timestamp(data.get("created_at"))
+    expires_at, expires_offset = normalize_iso_timestamp(data.get("expires_at"))
 
     fingerprint = {
         "title": data.get("name", ""), "description_html": description_html,
-        "published_at": data.get("published_at"), "created_at": data.get("created_at"),
-        "expires_at": data.get("expires_at"), "archived": data.get("archived"),
+        "published_at": published_at, "created_at": created_at,
+        "expires_at": expires_at, "archived": data.get("archived"),
         "employer_id": employer.get("id"), "employer_name": employer.get("name"),
         "raw": redacted_payload,
     }
@@ -134,8 +153,10 @@ def _snapshot(
     return {
         "observed_at": observed_at or utc_now(), "content_hash": content_hash,
         "title": data.get("name", ""), "description_html": description_html,
-        "description_text": description_text, "published_at": data.get("published_at"),
-        "created_at": data.get("created_at"), "expires_at": data.get("expires_at"),
+        "description_text": description_text, "published_at": published_at,
+        "published_at_source_offset": published_offset, "created_at": created_at,
+        "created_at_source_offset": created_offset, "expires_at": expires_at,
+        "expires_at_source_offset": expires_offset,
         "archived": data.get("archived"), "employer_id": employer.get("id"),
         "employer_name": employer.get("name"), "area_id": area.get("id"),
         "area_name": area.get("name"), "salary_from": salary.get("from"),
@@ -150,15 +171,21 @@ def _snapshot(
         "vacancy_type_id": _id(data.get("type")),
         "completeness": {
             # Legacy compact flags remain stable for existing consumers.
-            "description": bool(description_text), "published_at": bool(data.get("published_at")),
+            "description": bool(description_text), "published_at": bool(published_at),
             "fields": {
                 "title": _field_status(data.get("name"), source),
                 "description": _field_status(
                     description_text, source,
                     empty_reason="empty_or_not_provided_by_source",
                 ),
-                "published_at": _field_status(data.get("published_at"), source),
-                "created_at": _field_status(data.get("created_at"), source),
+                "published_at": _field_status(
+                    published_at, source,
+                    empty_reason="invalid_or_missing_source_timestamp" if data.get("published_at") else "not_provided_by_source",
+                ),
+                "created_at": _field_status(
+                    created_at, source,
+                    empty_reason="invalid_or_missing_source_timestamp" if data.get("created_at") else "not_provided_by_source",
+                ),
                 "employer": _field_status(employer.get("id") or employer.get("name"), source),
                 "geography": _field_status(area.get("id") or area.get("name"), source),
             },

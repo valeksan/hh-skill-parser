@@ -36,6 +36,16 @@ def parse_iso_date(value: str) -> str:
     return value
 
 
+def nonnegative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected non-negative integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("expected non-negative integer")
+    return parsed
+
+
 def validate_date_range(date_from: str | None, date_to: str | None) -> None:
     """Require finite, ordered date window when either bound is requested."""
     if bool(date_from) != bool(date_to):
@@ -95,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_commands = export.add_subparsers(dest="export_command", required=True)
     labeling_export = export_commands.add_parser("labeling", help="export relevance-labeling CSV")
     labeling_export.add_argument("--output", required=True)
+    labeling_export.add_argument("--sample-size", type=nonnegative_int, default=0)
+    labeling_export.add_argument("--sample-seed", default="0")
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
@@ -238,7 +250,9 @@ def run_export_labeling(settings: argparse.Namespace) -> int:
     """Write all auto-labeled snapshots as reviewable CSV."""
     database = Database(settings.database)
     database.migrate()
-    return export_labeling(database, settings.output)
+    return export_labeling(
+        database, settings.output, sample_size=settings.sample_size, sample_seed=settings.sample_seed,
+    )
 
 
 def run_import_labeling(settings: argparse.Namespace) -> int:

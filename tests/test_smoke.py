@@ -25,6 +25,7 @@ from hh_parser.cli import (
     run_import_labeling,
 )
 from hh_parser.config import cli_defaults, load_config
+from hh_parser.labeling import stratified_sample
 from hh_parser.query_specs import load_query_specs
 from relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
@@ -770,6 +771,18 @@ class ApiSourceTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_labeling_sample_is_deterministic_and_stratified(self):
+        rows = [
+            {"snapshot_id": 1, "query_families": "military", "_area_id": 1, "_period": "2026-01-01", "auto_label": "relevant"},
+            {"snapshot_id": 2, "query_families": "military", "_area_id": 1, "_period": "2026-01-01", "auto_label": "relevant"},
+            {"snapshot_id": 3, "query_families": "civil", "_area_id": 2, "_period": "2026-02-01", "auto_label": "borderline"},
+            {"snapshot_id": 4, "query_families": "civil", "_area_id": 2, "_period": "2026-02-01", "auto_label": "borderline"},
+        ]
+        first = stratified_sample(rows, 2, "pilot")
+        second = stratified_sample(rows, 2, "pilot")
+        self.assertEqual(first, second)
+        self.assertEqual({row["auto_label"] for row in first}, {"relevant", "borderline"})
+
     def test_labeling_cli_exports_and_imports_manual_review(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             database = Database(Path(temp_dir) / "research.sqlite3")

@@ -134,6 +134,11 @@ class Database:
         if status not in allowed:
             raise ValueError(f"status must be one of {sorted(allowed)}")
         counters = counters or {}
+        expected_keys = {"found", "unique", "loaded", "errors"}
+        if expected_keys.issubset(counters):
+            persisted = self.run_counters(run_id)
+            if {name: counters[name] for name in expected_keys} != persisted:
+                raise ValueError("run counters do not match persisted collection rows")
         columns = {
             "found": "found_count", "unique": "unique_count", "loaded": "loaded_count",
             "rejected": "rejected_count", "errors": "error_count",
@@ -356,6 +361,36 @@ class Database:
             return store(connection)
         with self.transaction() as tx:
             return store(tx)
+
+    def record_vacancy_request(
+        self, run_id: int, vacancy_hh_id: str | int, *, source: str, http_status: int | None,
+        error_type: str | None = None, error_message: str | None = None,
+        reason_code: str | None = None, connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """Append one card transport outcome, independent from snapshot persistence."""
+        reason_code = reason_code or (self.error_reason(error_type, http_status) if error_type else "success")
+        self._execute(
+            "INSERT INTO vacancy_requests(run_id, vacancy_hh_id, source, requested_at, http_status, "
+            "error_type, error_message, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, str(vacancy_hh_id), source, utc_now(), http_status, error_type, error_message, reason_code),
+            connection,
+        )
+
+    def counter_reconciliation(self, run_id: int) -> dict[str, Any]:
+        """Compare frozen run counters with current persisted collection rows."""
+        persisted = self.run_counters(run_id)
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT found_count, unique_count, loaded_count, error_count FROM collection_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"run {run_id} does not exist")
+        recorded = {
+            "found": int(row["found_count"]), "unique": int(row["unique_count"]),
+            "loaded": int(row["loaded_count"]), "errors": int(row["error_count"]),
+        }
+        return {"persisted": persisted, "recorded": recorded, "matches": persisted == recorded}
 
     def snapshot_id(self, vacancy_hh_id: str | int, content_hash: str) -> int:
         with self.connect() as connection:

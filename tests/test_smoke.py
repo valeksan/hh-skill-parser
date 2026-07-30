@@ -324,12 +324,13 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql"],
         )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
+                "vacancy_requests",
                 "snapshot_key_skills", "snapshot_roles", "snapshot_industries", "snapshot_work_formats",
                 "features",
                 "skills", "skill_aliases", "vacancy_skills",
@@ -1174,6 +1175,49 @@ class DatabaseTests(unittest.TestCase):
                 "SELECT http_status FROM collection_errors WHERE run_id = ?", (run_id,)
             ).fetchone()
         self.assertEqual((page["http_status"], recorded["http_status"]), (429, 429))
+
+    def test_snapshot_batch_keeps_pages_hits_durable_and_loads_all_cards(self):
+        run_id = Collector(self.database, write_batch_size=2).start({"fixture": "batch"}, ["1"])
+        Collector(self.database, write_batch_size=2).collect_paginated(
+            run_id, ["1"], ["воинский учет"],
+            search_page=lambda *_args, **_kwargs: ([
+                {"id": "1", "name": "Один", "_source": "api"},
+                {"id": "2", "name": "Два", "_source": "api"},
+                {"id": "3", "name": "Три", "_source": "api"},
+            ], True),
+            detail=lambda candidate: {"id": candidate["id"], "name": candidate["name"]},
+        )
+        with self.database.connect() as connection:
+            persisted = connection.execute(
+                "SELECT (SELECT COUNT(*) FROM search_pages WHERE run_id=?), "
+                "(SELECT COUNT(*) FROM vacancy_query_hits WHERE run_id=?), "
+                "(SELECT COUNT(*) FROM vacancy_snapshot_observations WHERE run_id=?)",
+                (run_id, run_id, run_id),
+            ).fetchone()
+        self.assertEqual(tuple(persisted), (1, 3, 3))
+
+    def test_card_transport_outcomes_and_counters_are_persisted(self):
+        run_id = Collector(self.database).start({"fixture": "card-audit"}, ["1"])
+        counters = Collector(self.database).collect_paginated(
+            run_id, ["1"], ["воинский учет"],
+            search_page=lambda *_args, **_kwargs: ([{"id": "1", "name": "Один", "_source": "api"}], True),
+            detail=lambda candidate: {"id": candidate["id"], "name": candidate["name"]},
+        )
+        with self.database.connect() as connection:
+            request = connection.execute(
+                "SELECT source, http_status, reason_code FROM vacancy_requests WHERE run_id=?", (run_id,),
+            ).fetchone()
+        self.assertEqual(tuple(request), ("api", 200, "success"))
+        self.assertEqual(self.database.counter_reconciliation(run_id), {
+            "persisted": counters, "recorded": counters, "matches": True,
+        })
+
+    def test_finish_run_rejects_counter_drift(self):
+        run_id = self.database.start_run({"fixture": "counter-drift"})
+        with self.assertRaisesRegex(ValueError, "do not match"):
+            self.database.finish_run(run_id, "completed", {
+                "found": 1, "unique": 1, "loaded": 1, "errors": 0,
+            })
 
     def test_coverage_report_and_retry_only_unresolved_card(self):
         parser = build_research_parser()

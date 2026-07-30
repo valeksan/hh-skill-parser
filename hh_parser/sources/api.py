@@ -13,6 +13,7 @@ class HHApiSource:
     """Fetch HH vacancy search/detail JSON without browser fallback state."""
 
     base_url = "https://api.hh.ru"
+    source_name = "api"
     allowed_hosts = frozenset({"hh.ru", "rabota.by", "hh1.az", "hh.uz", "hh.kz", "headhunter.ge", "headhunter.kg"})
 
     def __init__(
@@ -89,6 +90,7 @@ class HHApiSource:
                     self.sleep_fn(self._retry_after(response, self.retry_backoff * (2 ** attempt)))
                     continue
             response.raise_for_status()
+            self.last_response_status = int(status)
             return response
         raise RuntimeError("unreachable HH API retry state")
 

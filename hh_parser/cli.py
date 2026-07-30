@@ -52,6 +52,13 @@ def nonnegative_int(value: str) -> int:
     return parsed
 
 
+def positive_int(value: str) -> int:
+    parsed = nonnegative_int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("expected positive integer")
+    return parsed
+
+
 def validate_date_range(date_from: str | None, date_to: str | None) -> None:
     """Require finite, ordered date window when either bound is requested."""
     if bool(date_from) != bool(date_to):
@@ -193,6 +200,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="incremental continues compatible watermark; full requires explicit date range",
     )
     collect.add_argument("--max-pages", type=int, default=20)
+    collect.add_argument(
+        "--write-batch-size", type=positive_int, default=1,
+        help="transactional snapshot writes per batch; pages/hits remain durable first",
+    )
     collect.add_argument("--date-from", type=parse_iso_date, help="inclusive initial/full window start (YYYY-MM-DD)")
     collect.add_argument("--date-to", type=parse_iso_date, help="inclusive window end; incremental defaults to today")
     collect.add_argument("--date-slice-min-days", type=int, default=1)
@@ -401,6 +412,7 @@ def run_collect(
         "database_wal": settings.wal, "database_busy_timeout_ms": settings.busy_timeout_ms,
         "max_retries": settings.max_retries, "retry_backoff": settings.retry_backoff,
         "collection_mode": settings.collection_mode, "max_pages": settings.max_pages,
+        "write_batch_size": settings.write_batch_size,
         "date_from": effective_date_from, "date_to": effective_date_to,
         "date_slice_min_days": settings.date_slice_min_days,
         "date_overlap_days": settings.date_overlap_days,
@@ -410,7 +422,7 @@ def run_collect(
         "watermark_before": watermark_before, "watermark_scope": watermark_scope,
         "watermark_scope_hash": watermark_scope_hash,
     }
-    collector = Collector(database, transport=source)
+    collector = Collector(database, transport=source, write_batch_size=settings.write_batch_size)
     run_id = collector.start(
         config, area_ids, catalog_version_id=catalog_version_id,
         selection_source=selection_source, source_policy=settings.source,
@@ -439,7 +451,7 @@ def run_resume(
     source_settings = argparse.Namespace(**source_options)
     source = source_factory(source_settings)
     if config.get("effective_date_from", config.get("date_from")):
-        return Collector(database, transport=source).resume_sliced(
+        return Collector(database, transport=source, write_batch_size=config.get("write_batch_size", 1)).resume_sliced(
             settings.run_id, load_frozen_query_specs(config, settings.queries_file),
             search_page=source.search_page, detail=source.detail,
             max_pages=config.get("max_pages", settings.max_pages),
@@ -448,7 +460,7 @@ def run_resume(
             min_window_days=config.get("date_slice_min_days", 1),
             overlap_days=config.get("date_overlap_days", 1),
         )
-    return Collector(database, transport=source).resume_paginated(
+    return Collector(database, transport=source, write_batch_size=config.get("write_batch_size", 1)).resume_paginated(
         settings.run_id, load_frozen_query_specs(config, settings.queries_file),
         search_page=source.search_page, detail=source.detail,
         max_pages=config.get("max_pages", settings.max_pages),
@@ -462,7 +474,7 @@ def run_retry(settings: argparse.Namespace, *, source_factory: Callable[[argpars
         raise ValueError("max attempts must be positive")
     config = database.run_config(settings.run_id)
     source = source_factory(argparse.Namespace(**{**vars(settings), "host": config.get("host", settings.host), "locale": config.get("locale", settings.locale)}))
-    return Collector(database, transport=source).retry_unresolved(
+    return Collector(database, transport=source, write_batch_size=config.get("write_batch_size", 1)).retry_unresolved(
         settings.run_id, search_page=source.search_page, detail=source.detail, max_attempts=settings.max_attempts,
     )
 

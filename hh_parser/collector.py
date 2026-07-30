@@ -15,9 +15,12 @@ from .storage import Database
 class Collector:
     """Collect candidates before relevance decisions; persist every stage."""
 
-    def __init__(self, database: Database, *, transport: Any | None = None):
+    def __init__(self, database: Database, *, transport: Any | None = None, write_batch_size: int = 1):
         self.database = database
         self.transport = transport
+        if write_batch_size < 1:
+            raise ValueError("write_batch_size must be positive")
+        self.write_batch_size = write_batch_size
         self.loaded_ids: set[str] = set()
         self._catalog_by_run: dict[int, dict[str, Any] | None] = {}
 
@@ -79,7 +82,7 @@ class Collector:
                             )
                         self.database.record_search_page(
                             run_id, query_id, page=0, area_id=int(area_id), http_status=200,
-                            result_count=len(candidates), is_last_page=True,
+                            result_count=len(candidates), is_last_page=True, source=self._source_name(),
                         )
                         self.database.resolve_errors(
                             run_id, "search", query_id=query_id, area_id=int(area_id)
@@ -89,11 +92,12 @@ class Collector:
                         self.database.record_search_page(
                             run_id, query_id, page=0, area_id=int(area_id),
                             http_status=http_status, error_type=type(error).__name__, error_message=str(error),
-                            is_last_page=False,
+                            is_last_page=False, source=self._source_name(),
                         )
                         self.database.record_error(
                             run_id, "search", type(error).__name__, str(error),
                             query_id=query_id, area_id=int(area_id), http_status=http_status,
+                            source=self._source_name(),
                         )
                         continue
                 for candidate in candidates:
@@ -103,6 +107,10 @@ class Collector:
                     self.loaded_ids.add(vacancy_id)
                     try:
                         payload = detail(candidate)
+                        self.database.record_vacancy_request(
+                            run_id, vacancy_id, source=self._source_name(),
+                            http_status=self._detail_status(),
+                        )
                         snapshot = self._normalize_snapshot(run_id, payload)
                         self._store_snapshot(run_id, vacancy_id, snapshot)
                         self.database.resolve_errors(
@@ -110,10 +118,15 @@ class Collector:
                         )
                     except Exception as error:
                         self.loaded_ids.discard(vacancy_id)
+                        self.database.record_vacancy_request(
+                            run_id, vacancy_id, source=self._source_name(),
+                            http_status=self._http_status(error), error_type=type(error).__name__,
+                            error_message=str(error),
+                        )
                         self.database.record_error(
                             run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                             area_id=int(area_id), vacancy_hh_id=vacancy_id,
-                            http_status=self._http_status(error),
+                            http_status=self._http_status(error), source=self._source_name(),
                         )
         return self._finish(run_id)
 
@@ -154,7 +167,7 @@ class Collector:
                         run_id, "coverage", "SearchDepthSaturated",
                         f"reached {max_pages * 100} result depth; split by date window",
                         query_id=query_id, area_id=int(area_id),
-                        date_from=date_from, date_to=date_to,
+                        date_from=date_from, date_to=date_to, source=self._source_name(),
                     )
         return self._finish(run_id)
 
@@ -195,7 +208,7 @@ class Collector:
                             run_id, "coverage", "SearchDepthSaturated",
                             f"cannot split {window_from}..{window_to} below {min_window_days} day(s)",
                             query_id=query_id, area_id=int(area_id),
-                            date_from=window_from, date_to=window_to,
+                            date_from=window_from, date_to=window_to, source=self._source_name(),
                         )
         return self._finish(run_id)
 
@@ -208,7 +221,7 @@ class Collector:
                 self.database.record_error(
                     run_id, "auth", "AuthenticationDegraded",
                     "HH access token was rejected; continued with public API",
-                    http_status=event.get("http_status"),
+                    http_status=event.get("http_status"), source=self._source_name(),
                 )
         counters = self.database.run_counters(run_id)
         status = "completed" if not counters["errors"] else "degraded"
@@ -275,10 +288,17 @@ class Collector:
                 vacancy_id = str(error["vacancy_hh_id"])
                 try:
                     payload = detail({"id": vacancy_id, "_source": self._source_name()})
+                    self.database.record_vacancy_request(
+                        run_id, vacancy_id, source=self._source_name(), http_status=self._detail_status(),
+                    )
                     self._store_snapshot(run_id, vacancy_id, self._normalize_snapshot(run_id, payload))
                     self.loaded_ids.add(vacancy_id)
                     self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
                 except Exception as exc:
+                    self.database.record_vacancy_request(
+                        run_id, vacancy_id, source=self._source_name(), http_status=self._http_status(exc),
+                        error_type=type(exc).__name__, error_message=str(exc),
+                    )
                     self.database.record_error(run_id, "vacancy", type(exc).__name__, str(exc), query_id=error["query_id"],
                         area_id=error["area_id"], vacancy_hh_id=vacancy_id, http_status=self._http_status(exc),
                         attempt=attempt, source=self._source_name())
@@ -286,6 +306,11 @@ class Collector:
 
     def _source_name(self) -> str:
         return str(getattr(self.transport, "source_name", "api"))
+
+    def _detail_status(self) -> int:
+        """Successful detail call is HTTP 2xx; API transport supplies exact status."""
+        status = getattr(self.transport, "last_response_status", 200)
+        return status if isinstance(status, int) and 200 <= status <= 299 else 200
 
     def _collect_search_unit(
         self, run_id: int, query_id: int, expression: str, area_id: int,
@@ -392,27 +417,61 @@ class Collector:
         self, run_id: int, candidates: Iterable[dict[str, Any]],
         detail: Callable[[dict[str, Any]], dict[str, Any]], query_id: int, area_id: int, *, error_attempt: int = 1,
     ) -> None:
-        """Load each unseen card; failed cards remain eligible for resume."""
+        """Load cards; pages/hits stay durable before controlled snapshot batches."""
+        pending: list[tuple[str, dict[str, Any]]] = []
         for candidate in candidates:
             vacancy_id = str(candidate["id"])
             if vacancy_id in self.loaded_ids:
                 continue
             self.loaded_ids.add(vacancy_id)
             try:
-                snapshot = self._normalize_snapshot(run_id, detail(candidate))
-                self._store_snapshot(run_id, vacancy_id, snapshot)
-                self.database.resolve_errors(run_id, "vacancy", vacancy_hh_id=vacancy_id)
+                payload = detail(candidate)
+                self.database.record_vacancy_request(
+                    run_id, vacancy_id, source=self._source_name(), http_status=self._detail_status(),
+                )
+                snapshot = self._normalize_snapshot(run_id, payload)
+                pending.append((vacancy_id, snapshot))
+                if len(pending) >= self.write_batch_size:
+                    self._store_snapshot_batch(run_id, pending, query_id, area_id, error_attempt)
+                    pending = []
             except Exception as error:
                 self.loaded_ids.discard(vacancy_id)
+                self.database.record_vacancy_request(
+                    run_id, vacancy_id, source=self._source_name(), http_status=self._http_status(error),
+                    error_type=type(error).__name__, error_message=str(error),
+                )
                 self.database.record_error(
                     run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
                     area_id=area_id, vacancy_hh_id=vacancy_id,
                     http_status=self._http_status(error), source=self._source_name(), attempt=error_attempt,
                 )
+        if pending:
+            self._store_snapshot_batch(run_id, pending, query_id, area_id, error_attempt)
 
     def _store_snapshot(self, run_id: int, vacancy_id: str, snapshot: dict[str, Any]) -> None:
         """Persist durable source snapshot only; extractors run offline."""
         self.database.record_snapshot(run_id, vacancy_id, snapshot)
+
+    def _store_snapshot_batch(
+        self, run_id: int, pending: list[tuple[str, dict[str, Any]]], query_id: int, area_id: int,
+        error_attempt: int,
+    ) -> None:
+        """Commit a bounded snapshot batch; failed batch remains retryable by card."""
+        try:
+            with self.database.transaction() as tx:
+                for vacancy_id, snapshot in pending:
+                    self.database.record_snapshot(run_id, vacancy_id, snapshot, connection=tx)
+                    self.database.resolve_errors(
+                        run_id, "vacancy", vacancy_hh_id=vacancy_id, connection=tx,
+                    )
+        except Exception as error:
+            for vacancy_id, _snapshot in pending:
+                self.loaded_ids.discard(vacancy_id)
+                self.database.record_error(
+                    run_id, "vacancy", type(error).__name__, str(error), query_id=query_id,
+                    area_id=area_id, vacancy_hh_id=vacancy_id, attempt=error_attempt,
+                    source=self._source_name(), reason_code="storage",
+                )
 
     def _normalize_snapshot(self, run_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         """Normalize card with geography from run's frozen `/areas` catalog."""

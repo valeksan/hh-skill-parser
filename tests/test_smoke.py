@@ -26,7 +26,7 @@ from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_import_labeling, run_extract, run_export_vacancies, run_stats,
+    run_db, run_import_labeling, run_extract, run_export_vacancies, run_maintenance, run_stats,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -430,6 +430,63 @@ class DatabaseTests(unittest.TestCase):
             "stats", "--database", str(self.database.path), "--run-id", str(run_id),
         ])
         self.assertEqual(run_stats(settings)["vacancies"], 1)
+
+    def test_raw_purge_is_preview_by_default_and_keeps_snapshots(self):
+        run_id = self.database.start_run({"fixture": "raw-purge"})
+        for vacancy_id, observed_at, raw_payload in (
+            ("raw-old", "2024-01-01T00:00:00+00:00", b"old-raw"),
+            ("raw-new", "2026-01-01T00:00:00+00:00", b"new-raw"),
+        ):
+            self.database.upsert_vacancy(vacancy_id, source="api")
+            self.database.record_snapshot(run_id, vacancy_id, {
+                "content_hash": f"hash-{vacancy_id}", "title": vacancy_id, "source": "api",
+                "observed_at": observed_at, "raw_payload": raw_payload, "raw_compression": "gzip",
+                "raw_size": len(raw_payload), "raw_hash": f"raw-{vacancy_id}",
+            })
+        parser = build_research_parser()
+        preview = parser.parse_args([
+            "maintenance", "--database", str(self.database.path), "purge-raw", "--before", "2025-01-01",
+        ])
+        self.assertEqual(run_maintenance(preview), {
+            "dry_run": True, "before": "2025-01-01", "snapshots": 1, "raw_bytes": 7,
+        })
+        with self.assertRaisesRegex(ValueError, "--execute --confirm"):
+            run_maintenance(parser.parse_args([
+                "maintenance", "--database", str(self.database.path), "purge-raw", "--before", "2025-01-01", "--execute",
+            ]))
+        purged = run_maintenance(parser.parse_args([
+            "maintenance", "--database", str(self.database.path), "purge-raw", "--before", "2025-01-01",
+            "--execute", "--confirm", "PURGE_RAW_PAYLOADS",
+        ]))
+        self.assertEqual(purged, {
+            "dry_run": False, "before": "2025-01-01", "snapshots": 1, "raw_bytes": 7, "purged": 1,
+        })
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT vacancy_hh_id, title, raw_payload, raw_hash FROM vacancy_snapshots ORDER BY vacancy_hh_id"
+            ).fetchall()
+        self.assertEqual(rows[0]["vacancy_hh_id"], "raw-new")
+        self.assertEqual(rows[0]["raw_payload"], b"new-raw")
+        self.assertEqual(tuple(rows[1]), ("raw-old", "raw-old", None, "raw-raw-old"))
+
+    def test_db_reset_previews_then_clears_data_but_keeps_schema(self):
+        run_id = self.database.start_run({"fixture": "reset"})
+        self.database.upsert_vacancy("reset-1", source="api")
+        self.database.record_snapshot(run_id, "reset-1", {
+            "content_hash": "reset-hash", "title": "Воинский учет", "source": "api",
+            "description_text": "Бронирование",
+        })
+        parser = build_research_parser()
+        preview = run_db(parser.parse_args(["db", "--database", str(self.database.path), "reset"]))
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["tables"]["vacancy_snapshots"], 1)
+        cleared = run_db(parser.parse_args(["db", "--database", str(self.database.path), "reset", "--yes"]))
+        self.assertFalse(cleared["dry_run"])
+        self.assertEqual(cleared["tables"]["vacancy_snapshots"], 1)
+        self.assertEqual(self.database.search_text("воинский"), [])
+        self.assertEqual(self.database.run_counters(self.database.start_run({"fixture": "fresh"})), {
+            "found": 0, "unique": 0, "loaded": 0, "errors": 0,
+        })
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")
@@ -914,6 +971,12 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(snapshot["roles"], [{"id": "1", "name": "Специалист"}])
         self.assertEqual(snapshot["key_skills"], [{"name": "Воинский учет"}])
         self.assertEqual(snapshot["department_name"], "Первый отдел")
+        self.assertTrue(snapshot["completeness"]["fields"]["description"]["present"])
+        self.assertEqual(snapshot["completeness"]["fields"]["description"]["source"], "api")
+        self.assertEqual(
+            snapshot["completeness"]["fields"]["published_at"]["missing_reason"],
+            "not_provided_by_source",
+        )
         self.assertTrue(snapshot["redaction_applied"])
 
     def test_snapshot_metadata_creates_normalized_multivalue_links(self):

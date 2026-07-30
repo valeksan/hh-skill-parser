@@ -52,6 +52,33 @@ Run ID и счётчики печатаются в JSON. Область, стр�
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
 
+## Очистка raw payload
+
+Сканированные snapshots, hits, labels, features и exports команда не удаляет.
+Отдельная maintenance-команда удаляет только compressed raw BLOB старше границы.
+Первый вызов всегда preview:
+
+```bash
+hh-skill-parser maintenance --database hh_mobilization.sqlite3 purge-raw --before 2025-01-01
+
+# Необратимо удалить только показанные raw BLOB.
+hh-skill-parser maintenance --database hh_mobilization.sqlite3 purge-raw --before 2025-01-01 \
+  --execute --confirm PURGE_RAW_PAYLOADS
+```
+
+## Полный новый скан
+
+Обычный `collect` никогда не очищает прошлые результаты. Для полного старта с
+чистой DB используйте отдельную команду. Без `--yes` она только покажет таблицы
+и число строк:
+
+```bash
+hh-skill-parser db --database hh_mobilization.sqlite3 reset
+
+# Необратимо очистить collected/derived data. Schema и migrations сохранятся.
+hh-skill-parser db --database hh_mobilization.sqlite3 reset --yes
+```
+
 ## Команды `parse_skills.py`
 
 ```bash

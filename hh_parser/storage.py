@@ -463,6 +463,54 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def raw_payload_purge_summary(self, before: str) -> dict[str, int]:
+        """Return reclaimable raw-BLOB count/size; source snapshots remain intact."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS snapshots, COALESCE(SUM(raw_size), 0) AS raw_bytes "
+                "FROM vacancy_snapshots WHERE raw_payload IS NOT NULL AND date(last_seen_at) < date(?)",
+                (before,),
+            ).fetchone()
+        return {"snapshots": int(row["snapshots"]), "raw_bytes": int(row["raw_bytes"])}
+
+    def purge_raw_payloads(self, before: str) -> dict[str, int]:
+        """Permanently drop only compressed raw payload BLOBs before date boundary."""
+        summary = self.raw_payload_purge_summary(before)
+        with self.transaction() as tx:
+            cursor = tx.execute(
+                "UPDATE vacancy_snapshots SET raw_payload = NULL, raw_compression = NULL, raw_size = NULL "
+                "WHERE raw_payload IS NOT NULL AND date(last_seen_at) < date(?)",
+                (before,),
+            )
+        summary["purged"] = int(cursor.rowcount)
+        return summary
+
+    _RESET_TABLES = (
+        "extraction_errors", "extraction_runs", "vacancy_skills", "skill_aliases", "skills",
+        "features", "relevance_labels", "snapshot_work_formats", "snapshot_industries",
+        "snapshot_roles", "snapshot_key_skills", "vacancy_snapshot_observations",
+        "collection_errors", "vacancy_query_hits", "search_pages", "run_areas",
+        "vacancy_snapshots", "vacancies", "search_queries", "collection_runs",
+        "areas", "area_catalog_versions",
+    )
+
+    def reset_data_summary(self) -> dict[str, int]:
+        """Count removable collection/derived rows while preserving schema/migrations."""
+        with self.connect() as connection:
+            counts = {
+                table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in self._RESET_TABLES
+            }
+        return {table: count for table, count in counts.items() if count}
+
+    def reset_data(self) -> dict[str, int]:
+        """Permanently remove all collected/derived data; schema stays ready for fresh scan."""
+        summary = self.reset_data_summary()
+        with self.transaction() as tx:
+            for table in self._RESET_TABLES:
+                tx.execute(f"DELETE FROM {table}")
+        return summary
+
     def start_extraction_run(self, kind: str, version: str, config: dict[str, Any], selected_count: int) -> int:
         """Create durable run metadata for a local, rebuildable extractor."""
         if kind not in {"relevance", "features", "skills"}:

@@ -146,6 +146,21 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--date-from", type=parse_iso_date)
     stats.add_argument("--date-to", type=parse_iso_date)
 
+    maintenance = commands.add_parser("maintenance", help="explicit database maintenance")
+    maintenance.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    maintenance_commands = maintenance.add_subparsers(dest="maintenance_command", required=True)
+    purge_raw = maintenance_commands.add_parser("purge-raw", help="preview or purge old raw payload BLOBs only")
+    purge_raw.add_argument("--before", required=True, type=parse_iso_date)
+    purge_raw.add_argument("--execute", action="store_true", help="perform purge; default is preview")
+    purge_raw.add_argument("--confirm", help="required exact value: PURGE_RAW_PAYLOADS")
+
+    db = commands.add_parser("db", help="database lifecycle commands")
+    db.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    db_commands = db.add_subparsers(dest="db_command", required=True)
+    db_commands.add_parser("migrate", help="apply packaged SQLite migrations")
+    reset = db_commands.add_parser("reset", help="preview or clear all collected/derived data")
+    reset.add_argument("--yes", action="store_true", help="permanently clear data; default is preview")
+
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
     labeling_import.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
@@ -318,6 +333,31 @@ def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def run_maintenance(settings: argparse.Namespace) -> dict[str, Any]:
+    """Run explicit, narrowly scoped maintenance action."""
+    database = Database(settings.database)
+    database.migrate()
+    if settings.maintenance_command != "purge-raw":
+        raise ValueError(f"unsupported maintenance command: {settings.maintenance_command}")
+    if not settings.execute:
+        return {"dry_run": True, "before": settings.before, **database.raw_payload_purge_summary(settings.before)}
+    if settings.confirm != "PURGE_RAW_PAYLOADS":
+        raise ValueError("purge requires --execute --confirm PURGE_RAW_PAYLOADS")
+    return {"dry_run": False, "before": settings.before, **database.purge_raw_payloads(settings.before)}
+
+
+def run_db(settings: argparse.Namespace) -> dict[str, Any]:
+    """Run schema migration or explicit full data reset."""
+    database = Database(settings.database)
+    database.migrate()
+    if settings.db_command == "migrate":
+        return {"migrated": True}
+    summary = database.reset_data_summary()
+    if not settings.yes:
+        return {"dry_run": True, "tables": summary}
+    return {"dry_run": False, "tables": database.reset_data()}
+
+
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
     database = Database(settings.database)
@@ -419,6 +459,10 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(run_extract(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "stats":
             print(json.dumps(run_stats(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "maintenance":
+            print(json.dumps(run_maintenance(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "db":
+            print(json.dumps(run_db(settings), ensure_ascii=False, sort_keys=True))
         else:
             print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:

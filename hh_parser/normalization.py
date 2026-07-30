@@ -88,6 +88,16 @@ def _public_list(values: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _field_status(value: Any, source: str, *, empty_reason: str = "not_provided_by_source") -> dict[str, Any]:
+    """Keep field availability plus honest source/missing reason for DA quality slices."""
+    present = value not in (None, "", [], {})
+    return {
+        "present": present,
+        "source": source if present else None,
+        "missing_reason": None if present else empty_reason,
+    }
+
+
 def _snapshot(
     data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None
 ) -> dict[str, Any]:
@@ -138,7 +148,21 @@ def _snapshot(
         "roles": roles, "industries": industries, "key_skills": key_skills, "languages": languages,
         "department_id": _id(department), "department_name": department.get("name"),
         "vacancy_type_id": _id(data.get("type")),
-        "completeness": {"description": bool(description_text), "published_at": bool(data.get("published_at"))},
+        "completeness": {
+            # Legacy compact flags remain stable for existing consumers.
+            "description": bool(description_text), "published_at": bool(data.get("published_at")),
+            "fields": {
+                "title": _field_status(data.get("name"), source),
+                "description": _field_status(
+                    description_text, source,
+                    empty_reason="empty_or_not_provided_by_source",
+                ),
+                "published_at": _field_status(data.get("published_at"), source),
+                "created_at": _field_status(data.get("created_at"), source),
+                "employer": _field_status(employer.get("id") or employer.get("name"), source),
+                "geography": _field_status(area.get("id") or area.get("name"), source),
+            },
+        },
         "raw_payload": compressed, "raw_content_type": "application/json",
         "raw_compression": "gzip", "raw_size": len(compressed), "raw_hash": raw_hash,
         "redaction_applied": bool(redaction_types), "redaction_version": REDACTION_VERSION,

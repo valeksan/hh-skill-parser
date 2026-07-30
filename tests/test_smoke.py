@@ -355,6 +355,16 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(count, 0)
 
+    def test_area_catalog_round_trip_uses_latest_version(self):
+        tree = [{"id": "113", "name": "Россия", "areas": [
+            {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+        ]}]
+        catalog_id = self.database.store_area_catalog(tree, source_url="https://api.hh.ru/areas")
+        loaded_id, catalog = self.database.load_area_catalog()
+
+        self.assertEqual(loaded_id, catalog_id)
+        self.assertEqual(select_catalog_areas(catalog, "113", "leaf"), ["1"])
+
 
 class NormalizationTests(unittest.TestCase):
     def test_api_normalization_redacts_contacts_and_exact_location_before_compression(self):

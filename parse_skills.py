@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 from hh_parser.storage import Database
+from hh_parser.areas import AreaSelectionError, load_area_file, select_catalog_areas, validate_area_ids
 
 try:
     from console_animation import animate
@@ -1340,12 +1341,12 @@ def parse_command_arguments(argv: list[str]) -> tuple[str, list[str]]:
         if command_argv:
             raise SystemExit("Команда help не принимает опции")
         return command, command_argv
-    if command in {"run", "chart", "db"}:
+    if command in {"run", "chart", "db", "areas"}:
         if any(argument in {"-h", "--help"} for argument in command_argv):
             raise SystemExit("Для справки используйте: parse_skills.py help")
         return command, command_argv
     raise SystemExit(
-        "Неизвестная команда. Доступны: help, run, chart, db. "
+        "Неизвестная команда. Доступны: help, run, chart, db, areas. "
         "Справка: parse_skills.py help"
     )
 
@@ -1358,6 +1359,7 @@ def print_help() -> None:
         "  run [опции]       собрать вакансии и сохранить результаты\n"
         "  chart [опции]     построить PNG из сохранённого CSV без сбора\n"
         "  db init [опции]   создать или обновить SQLite-схему\n"
+        "  areas ACTION       синхронизировать/проверить/показать areas\n"
         "\n"
         "Основные опции run:\n"
         "  -a, --area ID\n"
@@ -1373,6 +1375,8 @@ def print_help() -> None:
         "\n"
         "Опции db init:\n"
         "  --database FILE       SQLite-файл (по умолчанию hh_mobilization.sqlite3)\n"
+        "\n"
+        "Areas actions: sync, list, validate\n"
         "\n"
         "Пример: parse_skills.py run --source html --mode description\n"
         "Пример: parse_skills.py chart --chart-input top_skills_rf.csv -o chart.png\n"
@@ -1395,6 +1399,47 @@ def run_database_command(argv: list[str]) -> None:
     print(f"SQLite schema ready: {database.path}")
 
 
+def run_areas_command(argv: list[str]) -> None:
+    """Manage versioned HH area catalogs."""
+    parser = argparse.ArgumentParser(prog="parse_skills.py areas")
+    parser.add_argument("action", choices=["sync", "list", "validate"])
+    parser.add_argument("--database", default=os.environ.get("HH_DATABASE", "hh_mobilization.sqlite3"))
+    parser.add_argument("--areas-file", default="areas.txt")
+    parser.add_argument("--catalog-version", type=int)
+    parser.add_argument("--root", default="113")
+    parser.add_argument("--level", choices=["root", "children", "leaf"], default="root")
+    parser.add_argument("--host", default="hh.ru")
+    parser.add_argument("--locale", default="RU")
+    parser.add_argument(
+        "--user-agent", default="hh-skill-parser/1.0 (contact@example.invalid)",
+        help="HH-User-Agent required by HH API",
+    )
+    settings = parser.parse_args(argv)
+    database = Database(settings.database)
+    database.migrate()
+    if settings.action == "sync":
+        url = "https://api.hh.ru/areas"
+        response = requests.get(
+            url, params={"host": settings.host, "locale": settings.locale},
+            headers={"HH-User-Agent": settings.user_agent, "Accept": "application/json"}, timeout=30,
+        )
+        response.raise_for_status()
+        catalog_id = database.store_area_catalog(
+            response.json(), source_url=url, host=settings.host, locale=settings.locale,
+        )
+        print(f"Area catalog synced: version {catalog_id}")
+        return
+    catalog_id, catalog = database.load_area_catalog(settings.catalog_version)
+    if settings.action == "validate":
+        area_ids = load_area_file(settings.areas_file)
+        validate_area_ids(area_ids, catalog)
+        print(f"Area file valid: {len(area_ids)} IDs; catalog version {catalog_id}")
+        return
+    for area_id in select_catalog_areas(catalog, settings.root, settings.level):
+        area = catalog[area_id]
+        print(f"{area.hh_id}\t{area.name}\tparent={area.parent_id or '-'}\tdepth={area.depth}")
+
+
 def main():
     global AUTO_SOURCE_FORCE_HTML
     AUTO_SOURCE_FORCE_HTML = False
@@ -1406,6 +1451,14 @@ def main():
 
     if command == "db":
         run_database_command(command_argv)
+        return
+
+    if command == "areas":
+        try:
+            run_areas_command(command_argv)
+        except (AreaSelectionError, requests.RequestException, ValueError) as error:
+            logger.critical(str(error))
+            raise SystemExit(2) from error
         return
 
     # Logging

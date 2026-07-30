@@ -283,6 +283,54 @@ class Database:
             values, connection,
         )
 
+    def store_area_catalog(
+        self, tree: list[dict[str, Any]], *, source_url: str, host: str = "hh.ru",
+        locale: str = "RU", connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Store one immutable, coordinate-free `/areas` catalog snapshot."""
+        from .areas import flatten_area_tree
+
+        payload_hash = hashlib.sha256(json_value(tree).encode("utf-8")).hexdigest()
+        catalog = flatten_area_tree(tree)
+        sql = (
+            "INSERT INTO area_catalog_versions(source_url, host, locale, fetched_at, payload_hash) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(payload_hash) DO UPDATE SET "
+            "source_url=excluded.source_url, host=excluded.host, locale=excluded.locale "
+            "RETURNING id"
+        )
+        def store(tx: sqlite3.Connection) -> int:
+            catalog_id = int(tx.execute(sql, (source_url, host, locale, utc_now(), payload_hash)).fetchone()[0])
+            for area in catalog.values():
+                tx.execute(
+                    "INSERT INTO areas(catalog_version_id, hh_id, parent_hh_id, name, depth) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(catalog_version_id, hh_id) DO UPDATE SET "
+                    "parent_hh_id=excluded.parent_hh_id, name=excluded.name, depth=excluded.depth",
+                    (catalog_id, area.hh_id, area.parent_id, area.name, area.depth),
+                )
+            return catalog_id
+        if connection is not None:
+            return store(connection)
+        with self.transaction() as tx:
+            return store(tx)
+
+    def load_area_catalog(self, catalog_version_id: int | None = None) -> tuple[int, dict[str, Any]]:
+        """Return latest or requested catalog as flat area rows."""
+        with self.connect() as connection:
+            if catalog_version_id is None:
+                row = connection.execute("SELECT id FROM area_catalog_versions ORDER BY id DESC LIMIT 1").fetchone()
+                if row is None:
+                    raise ValueError("area catalog is empty; run `areas sync` first")
+                catalog_version_id = int(row["id"])
+            rows = connection.execute(
+                "SELECT hh_id, parent_hh_id, name, depth FROM areas WHERE catalog_version_id = ?",
+                (catalog_version_id,),
+            ).fetchall()
+        from .areas import Area
+        return catalog_version_id, {
+            row["hh_id"]: Area(row["hh_id"], row["name"], row["parent_hh_id"], row["depth"])
+            for row in rows
+        }
+
     def _execute(self, sql: str, values: tuple[Any, ...], connection: sqlite3.Connection | None) -> None:
         if connection is not None:
             connection.execute(sql, values)

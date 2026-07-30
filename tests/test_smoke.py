@@ -9,6 +9,7 @@ from unittest import mock
 
 import parse_skills
 import start
+from hh_parser.storage import Database
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -263,6 +264,87 @@ class SmokeTests(unittest.TestCase):
             skills = parse_skills.get_skills_from_both_sources(data)
 
         self.assertEqual(skills, ["python", "sql", "airflow"])
+
+    def test_db_init_command_creates_sqlite_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "research.sqlite3"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "db", "init", "--database", str(database_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(database_path.exists())
+            self.assertIn("SQLite schema ready", result.stdout)
+
+
+class DatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.database = Database(Path(self.temp_dir.name) / "research.sqlite3")
+        self.database.migrate()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_migrations_are_recorded_and_idempotent(self):
+        self.database.migrate()
+
+        with self.database.connect() as connection:
+            migrations = connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+
+        self.assertEqual([row["version"] for row in migrations], ["0001_initial.sql"])
+        self.assertTrue(
+            {
+                "collection_runs", "search_queries", "search_pages",
+                "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
+            }.issubset(tables)
+        )
+
+    def test_fixture_collection_is_idempotent(self):
+        run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")
+        query_id = self.database.upsert_query("воинский учет", query_group="military")
+        self.database.upsert_vacancy("123", source="api", alternate_url="https://hh.ru/vacancy/123")
+        self.database.record_search_page(
+            run_id, query_id, page=0, area_id=1, request_params={"text": "воинский учет"},
+            http_status=200, result_count=1, is_last_page=True,
+        )
+        self.database.record_query_hit(run_id, query_id, "123", area_id=1, page=0, rank=0)
+        snapshot = {"content_hash": "fixture-hash", "title": "Специалист по воинскому учету", "source": "api"}
+        self.assertTrue(self.database.record_snapshot(run_id, "123", snapshot))
+
+        self.database.upsert_vacancy("123", source="api")
+        self.database.record_search_page(run_id, query_id, page=0, area_id=1, http_status=200, result_count=1)
+        self.database.record_query_hit(run_id, query_id, "123", area_id=1, page=0, rank=0)
+        self.assertFalse(self.database.record_snapshot(run_id, "123", snapshot))
+
+        with self.database.connect() as connection:
+            hit_count = connection.execute("SELECT COUNT(*) FROM vacancy_query_hits").fetchone()[0]
+            snapshot_count = connection.execute("SELECT COUNT(*) FROM vacancy_snapshots").fetchone()[0]
+            page_count = connection.execute("SELECT COUNT(*) FROM search_pages").fetchone()[0]
+
+        self.assertEqual((hit_count, snapshot_count, page_count), (1, 1, 1))
+
+    def test_transaction_rolls_back_all_writes(self):
+        with self.assertRaises(RuntimeError):
+            with self.database.transaction() as connection:
+                self.database.upsert_vacancy("rollback", source="api", connection=connection)
+                raise RuntimeError("stop")
+
+        with self.database.connect() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM vacancies WHERE hh_id = 'rollback'").fetchone()[0]
+
+        self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":

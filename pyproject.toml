@@ -38,3 +38,9 @@ hh-skill-parser = "parse_skills:main"
 
 [tool.setuptools]
 py-modules = ["parse_skills"]
+
+[tool.setuptools.packages.find]
+include = ["hh_parser*"]
+
+[tool.setuptools.package-data]
+hh_parser = ["migrations/*.sql"]

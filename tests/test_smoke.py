@@ -317,7 +317,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql"],
         )
         self.assertTrue(
             {
@@ -472,6 +472,21 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(snapshot_count, 1)
         self.assertIsNotNone(resolved)
+
+    def test_effective_relevance_view_prefers_manual_label(self):
+        run_id = self.database.start_run({"fixture": "manual-label"})
+        self.database.upsert_vacancy("123", source="api")
+        self.database.record_snapshot(run_id, "123", {
+            "content_hash": "manual-label-hash", "title": "Специалист", "source": "api",
+        })
+        snapshot_id = self.database.snapshot_id("123", "manual-label-hash")
+        self.database.upsert_auto_relevance(snapshot_id, "borderline", 0.0, [], "test")
+        self.database.set_manual_relevance(snapshot_id, "relevant", "reviewed")
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT auto_label, effective_label, effective_reason FROM effective_relevance_labels"
+            ).fetchone()
+        self.assertEqual(tuple(row), ("borderline", "relevant", "reviewed"))
 
     def test_collect_and_resume_cli_use_frozen_catalog_scope(self):
         self.database.store_area_catalog(

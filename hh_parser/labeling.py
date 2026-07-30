@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .storage import Database
 
-FIELDS = ("snapshot_id", "hh_id", "title", "description", "employer", "query_families", "auto_label", "auto_score", "auto_reasons", "manual_label", "manual_reason")
+FIELDS = ("snapshot_id", "hh_id", "title", "description", "employer", "query_families", "auto_label", "auto_score", "auto_reasons", "manual_label", "manual_reason", "effective_label", "effective_reason")
 
 
 def _rank(seed: str, value: str) -> str:
@@ -55,10 +55,10 @@ def export_labeling(
             "SELECT DISTINCT COALESCE(q.query_group, '') AS query_group "
             "FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id "
             "WHERE h.vacancy_hh_id=s.vacancy_hh_id ORDER BY query_group)), '') query_families, "
-            "l.label auto_label, l.score auto_score, l.reasons_json auto_reasons, "
-            "l.manual_label, l.manual_reason, s.area_id _area_id, "
+            "l.auto_label, l.auto_score, l.auto_reasons_json auto_reasons, "
+            "l.manual_label, l.manual_reason, l.effective_label, l.effective_reason, s.area_id _area_id, "
             "COALESCE(s.published_at, s.observed_at) _period "
-            "FROM vacancy_snapshots s JOIN relevance_labels l ON l.snapshot_id=s.id "
+            "FROM vacancy_snapshots s JOIN effective_relevance_labels l ON l.snapshot_id=s.id "
             "ORDER BY s.id"
         ).fetchall()
     rows = stratified_sample([dict(row) for row in rows], sample_size, sample_seed)

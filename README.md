@@ -34,6 +34,10 @@ hh-skill-parser collect --area 1 --area 2 --area 13 --area 7 --date-from 2026-01
 hh-skill-parser areas validate --areas-file areas.txt
 hh-skill-parser collect --areas-file areas.txt
 
+# HTML — отдельный явный source, без API→HTML fallback.
+# Каталог областей предварительно синхронизируется через API.
+hh-skill-parser collect --source html --area 1 --date-from 2026-01-01
+
 # Продолжение того же run после сбоя.
 hh-skill-parser resume --run-id RUN_ID
 
@@ -64,6 +68,7 @@ watermark.
 `export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
+HTML anti-bot/interstitial страница сохраняется как ошибка run, не как вакансия.
 
 ## Конфигурация DB-backed CLI
 

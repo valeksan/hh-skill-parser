@@ -15,6 +15,7 @@ import requests
 import parse_skills
 from hh_parser.storage import Database
 from hh_parser.normalization import normalize_api_vacancy, normalize_html_vacancy
+from hh_parser.sources.html import HHHtmlAntiBotError, HHHtmlSource
 from hh_parser.areas import (
     AreaSelectionError, find_overlaps, flatten_area_tree, parse_area_lines,
     resolve_russia_geography, select_catalog_areas, validate_area_ids,
@@ -1808,6 +1809,53 @@ class AreaTests(unittest.TestCase):
             ]))
         self.assertEqual(listed, [{"catalog_version": str(synced), "id": "1", "name": "Москва"}])
         self.assertEqual(validated, ["1"])
+
+class HtmlSourceTests(unittest.TestCase):
+    def test_html_jobposting_and_selectors_normalize_to_snapshot_contract(self):
+        html = """
+        <html><head><script type="application/ld+json">{
+          "@context":"https://schema.org", "@type":"JobPosting", "title":"Аналитик",
+          "datePosted":"2026-07-01T10:00:00+03:00", "validThrough":"2026-08-01T00:00:00+03:00",
+          "hiringOrganization":{"name":"АО Пример"},
+          "jobLocation":{"address":{"addressLocality":"Москва"}},
+          "baseSalary":{"currency":"RUB","value":{"minValue":100000,"maxValue":150000}}
+        }</script></head><body>
+          <h1 data-qa="vacancy-title">Аналитик данных</h1>
+          <div data-qa="vacancy-description"><p>Воинский учет: mail@example.com</p></div>
+        </body></html>"""
+        data = HHHtmlSource.parse_vacancy_page(html, "42")
+        snapshot = normalize_html_vacancy(data, html)
+        self.assertEqual(snapshot["title"], "Аналитик данных")
+        self.assertEqual(snapshot["employer_name"], "АО Пример")
+        self.assertEqual(snapshot["area_name"], "Москва")
+        self.assertEqual(snapshot["salary_from"], 100000)
+        self.assertEqual(snapshot["published_at"], "2026-07-01T07:00:00+00:00")
+        self.assertTrue(snapshot["completeness"]["fields"]["employer"]["present"])
+        self.assertIn("[redacted-email]", snapshot["description_text"])
+
+    def test_html_anonymous_archived_missing_fields_and_anti_bot_are_honest(self):
+        archived = "<html><body><div>Вакансия в архиве</div><h1 data-qa='vacancy-title'>Сторож</h1></body></html>"
+        data = HHHtmlSource.parse_vacancy_page(archived, "43")
+        snapshot = normalize_html_vacancy(data, archived)
+        self.assertTrue(snapshot["archived"])
+        self.assertIsNone(snapshot["employer_name"])
+        self.assertEqual(snapshot["completeness"]["fields"]["description"]["missing_reason"], "empty_or_not_provided_by_source")
+
+        class Response:
+            status_code = 200
+            text = "<html><body>Подтвердите, что вы не робот</body></html>"
+            def raise_for_status(self): pass
+        class Session:
+            def __init__(self): self.headers = {}
+            def get(self, *_args, **_kwargs): return Response()
+        with self.assertRaises(HHHtmlAntiBotError):
+            HHHtmlSource(user_agent="test/1", session=Session()).detail({"id": "43"})
+
+    def test_html_search_extracts_only_vacancy_ids(self):
+        items = HHHtmlSource.parse_search_page("""
+          <a data-qa='serp-item__title' href='/vacancy/123'>One</a>
+          <a href='/vacancy/123?x=1'>Duplicate</a><a href='/employer/4'>No</a>""")
+        self.assertEqual(items, [{"id": "123", "name": "One", "alternate_url": "/vacancy/123", "_source": "html"}])
 
 
 if __name__ == "__main__":

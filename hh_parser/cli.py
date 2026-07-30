@@ -26,6 +26,7 @@ from .labeling import export_labeling, import_labeling
 from .query_specs import QuerySpec, load_query_specs
 from .skill_dictionary import load_skill_dictionary
 from .sources.api import HHApiSource
+from .sources.html import HHHtmlSource
 from .stats import vacancy_stats
 from .storage import Database
 
@@ -151,9 +152,9 @@ def load_frozen_query_specs(config: dict[str, Any], fallback_path: str | Path) -
     return result
 
 
-def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
+def add_transport_arguments(parser: argparse.ArgumentParser, *, html_source: bool = True) -> None:
     """Add API connection options shared by collect and resume."""
-    parser.add_argument("--source", choices=["api"], default="api")
+    parser.add_argument("--source", choices=["api", "html"] if html_source else ["api"], default="api")
     parser.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
     parser.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
     parser.add_argument("--host", default="hh.ru")
@@ -324,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     areas_commands = areas.add_subparsers(dest="areas_command", required=True)
     areas_sync = areas_commands.add_parser("sync", help="fetch and store official HH /areas catalog")
     areas_sync.add_argument("--root", default="113")
-    add_transport_arguments(areas_sync)
+    add_transport_arguments(areas_sync, html_source=False)
     areas_list = areas_commands.add_parser("list", help="list a frozen catalog selection")
     areas_list.add_argument("--catalog-version", type=int)
     areas_list.add_argument("--root", default="113")
@@ -375,15 +376,18 @@ def resolve_collect_areas(settings: argparse.Namespace, database: Database) -> t
     return selected, catalog_version, "catalog"
 
 
-def make_source(settings: argparse.Namespace) -> HHApiSource:
-    """Create public API transport; token is never passed to run config."""
-    return HHApiSource(
+def make_source(settings: argparse.Namespace) -> Any:
+    """Create requested transport. Source choice is explicit; no fallback policy exists."""
+    options = dict(
         user_agent=settings.user_agent, timeout=settings.request_timeout,
         access_token=getattr(settings, "access_token", None) or None,
         host=settings.host, locale=settings.locale,
         max_retries=getattr(settings, "max_retries", 3),
         retry_backoff=getattr(settings, "retry_backoff", 1.0),
     )
+    if settings.source == "html":
+        return HHHtmlSource(**options)
+    return HHApiSource(**options)
 
 
 def run_collect(
@@ -447,6 +451,7 @@ def run_resume(
     source_options = {
         **vars(settings), "host": config.get("host", settings.host),
         "locale": config.get("locale", settings.locale),
+        "source": config.get("source", settings.source),
     }
     source_settings = argparse.Namespace(**source_options)
     source = source_factory(source_settings)
@@ -473,7 +478,10 @@ def run_retry(settings: argparse.Namespace, *, source_factory: Callable[[argpars
     if settings.max_attempts < 1:
         raise ValueError("max attempts must be positive")
     config = database.run_config(settings.run_id)
-    source = source_factory(argparse.Namespace(**{**vars(settings), "host": config.get("host", settings.host), "locale": config.get("locale", settings.locale)}))
+    source = source_factory(argparse.Namespace(**{
+        **vars(settings), "host": config.get("host", settings.host),
+        "locale": config.get("locale", settings.locale), "source": config.get("source", settings.source),
+    }))
     return Collector(database, transport=source, write_batch_size=config.get("write_batch_size", 1)).retry_unresolved(
         settings.run_id, search_page=source.search_page, detail=source.detail, max_attempts=settings.max_attempts,
     )

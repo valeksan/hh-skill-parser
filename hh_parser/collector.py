@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from datetime import date, timedelta
 from typing import Any
 
-from .normalization import normalize_api_vacancy
+from .normalization import normalize_api_vacancy, normalize_html_vacancy
 from .areas import resolve_russia_geography
 from .query_specs import QuerySpec
 from .storage import Database
@@ -411,7 +411,8 @@ class Collector:
 
     def _search_request_url(self) -> str | None:
         base_url = getattr(self.transport, "base_url", None)
-        return f"{base_url}/vacancies" if isinstance(base_url, str) else None
+        path = getattr(self.transport, "search_path", "/vacancies")
+        return f"{base_url}{path}" if isinstance(base_url, str) and isinstance(path, str) else None
 
     def _load_candidates(
         self, run_id: int, candidates: Iterable[dict[str, Any]],
@@ -483,6 +484,11 @@ class Collector:
                 if catalog_version_id is not None else None
             )
         catalog = self._catalog_by_run[run_id]
+        if self._source_name() == "html":
+            html = payload.get("_html")
+            if not isinstance(html, str):
+                raise ValueError("HTML source returned no raw HTML")
+            return normalize_html_vacancy(payload, html)
         geography = resolve_russia_geography((payload.get("area") or {}).get("id"), catalog) if catalog else None
         return normalize_api_vacancy(payload, geography=geography)
 

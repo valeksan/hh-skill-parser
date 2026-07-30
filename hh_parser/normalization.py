@@ -144,7 +144,7 @@ def _snapshot(
     expires_at, expires_offset = normalize_iso_timestamp(data.get("expires_at"))
 
     fingerprint = {
-        "title": data.get("name", ""), "description_html": description_html,
+        "title": data.get("name") or "", "description_html": description_html,
         "published_at": published_at, "created_at": created_at,
         "expires_at": expires_at, "archived": data.get("archived"),
         "employer_id": employer.get("id"), "employer_name": employer.get("name"),
@@ -155,7 +155,7 @@ def _snapshot(
     compressed, raw_hash = _compressed_json(redacted_payload)
     return {
         "observed_at": observed_at or utc_now(), "content_hash": content_hash,
-        "title": data.get("name", ""), "description_html": description_html,
+        "title": data.get("name") or "", "description_html": description_html,
         "description_text": description_text, "published_at": published_at,
         "published_at_source_offset": published_offset, "created_at": created_at,
         "created_at_source_offset": created_offset, "expires_at": expires_at,

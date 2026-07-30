@@ -313,12 +313,13 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql"],
         )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
+                "snapshot_key_skills", "snapshot_roles", "snapshot_industries",
             }.issubset(tables)
         )
 
@@ -577,6 +578,29 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(snapshot["key_skills"], [{"name": "Воинский учет"}])
         self.assertEqual(snapshot["department_name"], "Первый отдел")
         self.assertTrue(snapshot["redaction_applied"])
+
+    def test_snapshot_metadata_creates_normalized_multivalue_links(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = database.start_run({"fixture": True})
+            database.upsert_vacancy("1", source="api")
+            snapshot = normalize_api_vacancy({
+                "id": "1", "name": "Специалист",
+                "key_skills": [{"name": "Воинский учет"}],
+                "professional_roles": [{"id": "1", "name": "Специалист"}],
+                "industries": [{"id": "7.540", "name": "Оборонная промышленность"}],
+            })
+            database.record_snapshot(run_id, "1", snapshot)
+            with database.connect() as connection:
+                skill = connection.execute("SELECT skill_name FROM snapshot_key_skills").fetchone()[0]
+                role = connection.execute("SELECT role_id, role_name FROM snapshot_roles").fetchone()
+                industry = connection.execute(
+                    "SELECT industry_id, industry_name FROM snapshot_industries"
+                ).fetchone()
+        self.assertEqual(skill, "Воинский учет")
+        self.assertEqual(tuple(role), ("1", "Специалист"))
+        self.assertEqual(tuple(industry), ("7.540", "Оборонная промышленность"))
 
     def test_html_normalization_keeps_compressed_redacted_html(self):
         snapshot = normalize_html_vacancy(

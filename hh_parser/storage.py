@@ -307,11 +307,42 @@ class Database:
                 "observed_at = excluded.observed_at",
                 (run_id, str(vacancy_hh_id), snapshot_id, observed_at),
             )
+            self._store_snapshot_links(tx, snapshot_id, snapshot)
             return inserted
         if connection is not None:
             return store(connection)
         with self.transaction() as tx:
             return store(tx)
+
+    @staticmethod
+    def _store_snapshot_links(
+        connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],
+    ) -> None:
+        """Store analytical many-value links without discarding snapshot JSON."""
+        for skill in snapshot.get("key_skills", []):
+            name = skill.get("name") if isinstance(skill, dict) else None
+            if name:
+                connection.execute(
+                    "INSERT INTO snapshot_key_skills(snapshot_id, skill_name) VALUES (?, ?) "
+                    "ON CONFLICT(snapshot_id, skill_name) DO NOTHING",
+                    (snapshot_id, str(name)),
+                )
+        for role in snapshot.get("roles", []):
+            name = role.get("name") if isinstance(role, dict) else None
+            if name:
+                connection.execute(
+                    "INSERT INTO snapshot_roles(snapshot_id, role_id, role_name) VALUES (?, ?, ?) "
+                    "ON CONFLICT(snapshot_id, role_name) DO UPDATE SET role_id = excluded.role_id",
+                    (snapshot_id, role.get("id"), str(name)),
+                )
+        for industry in snapshot.get("industries", []):
+            name = industry.get("name") if isinstance(industry, dict) else None
+            if name:
+                connection.execute(
+                    "INSERT INTO snapshot_industries(snapshot_id, industry_id, industry_name) VALUES (?, ?, ?) "
+                    "ON CONFLICT(snapshot_id, industry_name) DO UPDATE SET industry_id = excluded.industry_id",
+                    (snapshot_id, industry.get("id"), str(name)),
+                )
 
     def record_error(
         self, run_id: int, stage: str, error_type: str, message: str, *,

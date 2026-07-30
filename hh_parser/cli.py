@@ -15,6 +15,7 @@ import requests
 from .areas import AreaSelectionError, find_overlaps, load_area_file, select_catalog_areas, validate_area_ids
 from .collector import Collector
 from .config import cli_defaults, load_config
+from .query_specs import load_query_specs
 from .sources.api import HHApiSource
 from .storage import Database
 
@@ -39,15 +40,9 @@ def validate_date_range(date_from: str | None, date_to: str | None) -> None:
         raise ValueError("--date-from must not be after --date-to")
 
 
-def load_query_file(path: str | Path) -> list[str]:
+def load_query_file(path: str | Path):
     """Load nonempty, non-comment HH expressions without altering syntax."""
-    values = [
-        line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    if not values:
-        raise ValueError("query file contains no active expressions")
-    return values
+    return load_query_specs(path)
 
 
 def add_transport_arguments(parser: argparse.ArgumentParser) -> None:

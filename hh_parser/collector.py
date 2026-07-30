@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from .normalization import normalize_api_vacancy
+from .query_specs import QuerySpec
 from .storage import Database
 
 
@@ -29,6 +30,12 @@ class Collector:
         )
         return run_id
 
+    @staticmethod
+    def _query(value: str | QuerySpec) -> tuple[str, dict[str, Any]]:
+        if isinstance(value, QuerySpec):
+            return value.expression, {"version": value.version, "query_group": value.group, "purpose": value.purpose}
+        return value, {}
+
     def collect(
         self, run_id: int, area_ids: Iterable[str], queries: Iterable[str], *,
         search: Callable[[str, str], list[dict[str, Any]]],
@@ -37,8 +44,9 @@ class Collector:
         """Collect fixture/live transport results with durable per-stage writes."""
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
-            for expression in queries:
-                query_id = self.database.upsert_query(expression)
+            for query in queries:
+                expression, metadata = self._query(query)
+                query_id = self.database.upsert_query(expression, **metadata)
                 if self.database.search_page_succeeded(
                     run_id, query_id, area_id=int(area_id)
                 ):
@@ -121,8 +129,9 @@ class Collector:
             raise ValueError("date_from and date_to must be provided together")
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
-            for expression in queries:
-                query_id = self.database.upsert_query(expression)
+            for query in queries:
+                expression, metadata = self._query(query)
+                query_id = self.database.upsert_query(expression, **metadata)
                 saturated = self._collect_search_unit(
                     run_id, query_id, expression, int(area_id), search_page, detail,
                     max_pages=max_pages, date_from=date_from, date_to=date_to,
@@ -150,8 +159,9 @@ class Collector:
             raise ValueError("min_window_days must be positive and overlap_days non-negative")
         self.loaded_ids = self.database.observed_vacancy_ids(run_id)
         for area_id in area_ids:
-            for expression in queries:
-                query_id = self.database.upsert_query(expression)
+            for query in queries:
+                expression, metadata = self._query(query)
+                query_id = self.database.upsert_query(expression, **metadata)
                 pending = [(date_from, date_to)]
                 while pending:
                     window_from, window_to = pending.pop(0)

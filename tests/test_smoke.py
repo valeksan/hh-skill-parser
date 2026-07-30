@@ -22,6 +22,7 @@ from hh_parser.areas import (
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.cli import apply_defaults, build_parser as build_research_parser, run_collect, run_resume
 from hh_parser.config import cli_defaults, load_config
+from hh_parser.query_specs import load_query_specs
 from hh_parser.sources.api import HHApiSource
 
 
@@ -795,6 +796,18 @@ class ConfigTests(unittest.TestCase):
             path.write_text("[collection]\nunknown = 1\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unknown config key"):
                 load_config(path)
+
+    def test_versioned_query_specs_keep_hh_expression_unquoted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "queries.toml"
+            path.write_text(
+                "version = 'v2'\n[[query]]\nid = 'broad'\ngroup = 'markers'\n"
+                "expression = 'мобилизац*'\nsearch_fields = ['name', 'description']\n",
+                encoding="utf-8",
+            )
+            specs = load_query_specs(path)
+        self.assertEqual(specs[0].expression, "мобилизац*")
+        self.assertEqual(specs[0].version, "v2")
 
 
 class AreaTests(unittest.TestCase):

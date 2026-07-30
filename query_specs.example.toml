@@ -1,0 +1,15 @@
+version = "2026-07-30"
+
+[[query]]
+id = "strong-mobilization"
+group = "strong_markers"
+expression = "мобилизац*"
+search_fields = ["name", "description"]
+purpose = "broad corpus"
+
+[[query]]
+id = "military-registration"
+group = "stable_phrases"
+expression = "\"воинский учет\""
+search_fields = ["name"]
+purpose = "high precision"

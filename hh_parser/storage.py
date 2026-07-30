@@ -335,6 +335,17 @@ class Database:
                 (snapshot_id, label, score, json_value(reasons), version, utc_now()),
             )
 
+    def set_manual_relevance(self, snapshot_id: int, label: str, reason: str | None) -> None:
+        if label not in {"relevant", "borderline", "irrelevant", "unknown"}:
+            raise ValueError(f"invalid manual label: {label}")
+        with self.transaction() as tx:
+            cursor = tx.execute(
+                "UPDATE relevance_labels SET manual_label=?, manual_reason=?, manual_labeled_at=? WHERE snapshot_id=?",
+                (label, reason or None, utc_now(), snapshot_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"snapshot {snapshot_id} has no auto relevance label")
+
     @staticmethod
     def _store_snapshot_links(
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],

@@ -23,3 +23,24 @@ def export_labeling(database: Database, path: str | Path) -> int:
         writer.writeheader()
         writer.writerows(dict(row) for row in rows)
     return len(rows)
+
+
+def import_labeling(database: Database, path: str | Path) -> int:
+    """Idempotently apply nonblank reviewed labels from a labeling CSV."""
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"snapshot_id", "manual_label", "manual_reason"}.issubset(reader.fieldnames):
+            raise ValueError("labeling CSV requires snapshot_id, manual_label, manual_reason columns")
+        rows = list(reader)
+    applied = 0
+    for row in rows:
+        label = (row.get("manual_label") or "").strip()
+        if not label:
+            continue
+        try:
+            snapshot_id = int(row["snapshot_id"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("snapshot_id must be an integer") from error
+        database.set_manual_relevance(snapshot_id, label, (row.get("manual_reason") or "").strip())
+        applied += 1
+    return applied

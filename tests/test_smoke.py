@@ -22,10 +22,11 @@ from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features
 from hh_parser.export import export_vacancies
+from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_import_labeling, run_extract, run_export_vacancies,
+    run_import_labeling, run_extract, run_export_vacancies, run_stats,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -406,6 +407,29 @@ class DatabaseTests(unittest.TestCase):
             "--snapshot", "all", "--run-id", str(run_id),
         ])
         self.assertEqual(run_export_vacancies(settings), 1)
+
+    def test_stats_are_db_only_and_honor_scope_filters(self):
+        run_id = self.database.start_run({"fixture": "stats"})
+        query_id = self.database.upsert_query("воинский учет", query_group="military")
+        self.database.upsert_vacancy("stats-1", source="api")
+        self.database.record_query_hit(run_id, query_id, "stats-1", area_id=1)
+        self.database.record_snapshot(run_id, "stats-1", {
+            "content_hash": "stats-hash", "title": "Воинский учет", "source": "api",
+            "area_id": 1, "published_at": "2026-07-02T12:00:00+00:00",
+        })
+        snapshot_id = self.database.snapshot_id("stats-1", "stats-hash")
+        self.database.upsert_auto_relevance(snapshot_id, "relevant", 1.0, ["signal"], "test")
+        summary = vacancy_stats(
+            self.database, area_ids=["1"], relevance="relevant", query_family="military",
+        )
+        self.assertEqual(summary["snapshots"], 1)
+        self.assertEqual(summary["vacancies"], 1)
+        self.assertEqual(summary["relevant"], 1)
+        self.assertEqual(summary["by_source"], {"api": 1})
+        settings = build_research_parser().parse_args([
+            "stats", "--database", str(self.database.path), "--run-id", str(run_id),
+        ])
+        self.assertEqual(run_stats(settings)["vacancies"], 1)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

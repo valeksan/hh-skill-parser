@@ -24,6 +24,7 @@ from .labeling import export_labeling, import_labeling
 from .query_specs import load_query_specs
 from .skill_dictionary import load_skill_dictionary
 from .sources.api import HHApiSource
+from .stats import vacancy_stats
 from .storage import Database
 
 DEFAULT_DATABASE = "hh_mobilization.sqlite3"
@@ -133,6 +134,17 @@ def build_parser() -> argparse.ArgumentParser:
     vacancies_export.add_argument("--query-family")
     vacancies_export.add_argument("--date-from", type=parse_iso_date)
     vacancies_export.add_argument("--date-to", type=parse_iso_date)
+
+    stats = commands.add_parser("stats", help="calculate DB-only vacancy statistics")
+    stats.add_argument("--config")
+    stats.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    stats.add_argument("--snapshot", choices=["latest", "all"], default="latest")
+    stats.add_argument("--run-id", action="append", type=int, default=[])
+    stats.add_argument("--area", action="append", default=[])
+    stats.add_argument("--relevance", choices=["relevant", "borderline", "irrelevant", "unknown"])
+    stats.add_argument("--query-family")
+    stats.add_argument("--date-from", type=parse_iso_date)
+    stats.add_argument("--date-to", type=parse_iso_date)
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
@@ -294,6 +306,18 @@ def run_export_vacancies(settings: argparse.Namespace) -> int:
     )
 
 
+def run_stats(settings: argparse.Namespace) -> dict[str, Any]:
+    """Calculate filtered counts from SQLite only."""
+    validate_date_range(settings.date_from, settings.date_to)
+    database = Database(settings.database)
+    database.migrate()
+    return vacancy_stats(
+        database, snapshot_scope=settings.snapshot, run_ids=settings.run_id or None,
+        area_ids=settings.area or None, relevance=settings.relevance,
+        query_family=settings.query_family, date_from=settings.date_from, date_to=settings.date_to,
+    )
+
+
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
     database = Database(settings.database)
@@ -393,6 +417,8 @@ def main(argv: list[str] | None = None) -> None:
                 print(json.dumps({"area_ids": run_areas_validate(settings)}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "extract":
             print(json.dumps(run_extract(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "stats":
+            print(json.dumps(run_stats(settings), ensure_ascii=False, sort_keys=True))
         else:
             print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:

@@ -355,16 +355,26 @@ class Database:
     def load_query_hits(
         self, run_id: int, query_id: int, *, area_id: int | None = None,
         date_from: str | None = None, date_to: str | None = None,
+        page: int | None = None,
     ) -> list[dict[str, Any]]:
         """Rebuild minimal detail work items from durable query hits."""
         with self.connect() as connection:
+            clauses = [
+                "h.run_id = ?", "h.query_id = ?", "h.area_id = ?",
+                "h.date_from = ?", "h.date_to = ?",
+            ]
+            values: list[Any] = [
+                run_id, query_id, area_id if area_id is not None else -1,
+                date_from or "", date_to or "",
+            ]
+            if page is not None:
+                clauses.append("h.page = ?")
+                values.append(page)
             rows = connection.execute(
                 "SELECT h.vacancy_hh_id AS id, h.rank, v.alternate_url, v.latest_source AS _source "
                 "FROM vacancy_query_hits h JOIN vacancies v ON v.hh_id = h.vacancy_hh_id "
-                "WHERE h.run_id = ? AND h.query_id = ? AND h.area_id = ? "
-                "AND h.date_from = ? AND h.date_to = ? ORDER BY h.rank, h.vacancy_hh_id",
-                (run_id, query_id, area_id if area_id is not None else -1,
-                 date_from or "", date_to or ""),
+                f"WHERE {' AND '.join(clauses)} ORDER BY h.rank, h.vacancy_hh_id",
+                values,
             ).fetchall()
         return [dict(row) for row in rows]
 

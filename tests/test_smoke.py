@@ -17,6 +17,7 @@ from hh_parser.areas import (
     select_catalog_areas, validate_area_ids,
 )
 from hh_parser.collector import Collector
+from hh_parser.cli import build_parser as build_research_parser, run_collect, run_resume
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -466,6 +467,81 @@ class DatabaseTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(snapshot_count, 1)
         self.assertIsNotNone(resolved)
+
+    def test_collect_and_resume_cli_use_frozen_catalog_scope(self):
+        self.database.store_area_catalog(
+            [{"id": "113", "name": "Россия", "areas": [
+                {"id": "1", "name": "Москва", "parent_id": "113", "areas": []},
+            ]}],
+            source_url="https://api.hh.ru/areas",
+        )
+        queries_path = Path(self.temp_dir.name) / "queries.txt"
+        queries_path.write_text("воинский учет\n", encoding="utf-8")
+        parser = build_research_parser()
+        settings = parser.parse_args([
+            "collect", "--database", str(self.database.path), "--queries-file", str(queries_path),
+            "--area", "1",
+        ])
+
+        class Source:
+            def __init__(self):
+                self.search_calls = 0
+                self.detail_calls = 0
+
+            def search_page(self, query, area_id, *, page):
+                self.search_calls += 1
+                if page != 0:
+                    raise AssertionError("unexpected extra page")
+                return [{"id": "123", "name": "Специалист", "_source": "api"}], True
+
+            def detail(self, candidate):
+                self.detail_calls += 1
+                if self.detail_calls == 1:
+                    raise RuntimeError("temporary")
+                return {"id": candidate["id"], "name": "Специалист"}
+
+        source = Source()
+        run_id, counters = run_collect(settings, source_factory=lambda _: source)
+        self.assertEqual(counters, {"found": 1, "unique": 1, "loaded": 0, "errors": 1})
+
+        resumed = run_resume(
+            parser.parse_args([
+                "resume", "--database", str(self.database.path), "--queries-file", str(queries_path),
+                "--run-id", str(run_id),
+            ]),
+            source_factory=lambda _: source,
+        )
+        self.assertEqual(resumed, {"found": 1, "unique": 1, "loaded": 1, "errors": 0})
+        self.assertEqual((source.search_calls, source.detail_calls), (1, 2))
+
+    def test_paginated_collector_records_each_page_and_flags_depth_saturation(self):
+        collector = Collector(self.database)
+        run_id = collector.start({"fixture": True}, ["1"])
+        requested_pages = []
+
+        def search_page(query, area_id, *, page):
+            requested_pages.append(page)
+            return ([{"id": str(page), "name": "Специалист", "_source": "api"}], page == 1)
+
+        counters = collector.collect_paginated(
+            run_id, ["1"], ["воинский учет"], search_page=search_page,
+            detail=lambda candidate: {"id": candidate["id"], "name": "Специалист"},
+        )
+        self.assertEqual(requested_pages, [0, 1])
+        self.assertEqual(counters, {"found": 2, "unique": 2, "loaded": 2, "errors": 0})
+
+        saturated_run = Collector(self.database).start({"fixture": "saturated"}, ["1"])
+        saturated = Collector(self.database).collect_paginated(
+            saturated_run, ["1"], ["воинский учет"],
+            search_page=lambda query, area_id, *, page: ([], False),
+            detail=lambda candidate: candidate, max_pages=1,
+        )
+        self.assertEqual(saturated["errors"], 1)
+        with self.database.connect() as connection:
+            error_type = connection.execute(
+                "SELECT error_type FROM collection_errors WHERE run_id = ?", (saturated_run,)
+            ).fetchone()[0]
+        self.assertEqual(error_type, "SearchDepthSaturated")
 
 
 class NormalizationTests(unittest.TestCase):

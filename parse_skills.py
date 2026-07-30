@@ -1341,12 +1341,14 @@ def parse_command_arguments(argv: list[str]) -> tuple[str, list[str]]:
         if command_argv:
             raise SystemExit("Команда help не принимает опции")
         return command, command_argv
-    if command in {"run", "chart", "db", "areas"}:
-        if any(argument in {"-h", "--help"} for argument in command_argv):
+    if command in {"run", "chart", "db", "areas", "collect", "resume"}:
+        if command not in {"collect", "resume"} and any(
+            argument in {"-h", "--help"} for argument in command_argv
+        ):
             raise SystemExit("Для справки используйте: parse_skills.py help")
         return command, command_argv
     raise SystemExit(
-        "Неизвестная команда. Доступны: help, run, chart, db, areas. "
+        "Неизвестная команда. Доступны: help, run, chart, db, areas, collect, resume. "
         "Справка: parse_skills.py help"
     )
 
@@ -1360,6 +1362,8 @@ def print_help() -> None:
         "  chart [опции]     построить PNG из сохранённого CSV без сбора\n"
         "  db init [опции]   создать или обновить SQLite-схему\n"
         "  areas ACTION       синхронизировать/проверить/показать areas\n"
+        "  collect [опции]    собрать кандидатов в SQLite через HH API\n"
+        "  resume [опции]     продолжить DB-backed run\n"
         "\n"
         "Основные опции run:\n"
         "  -a, --area ID\n"
@@ -1380,7 +1384,8 @@ def print_help() -> None:
         "\n"
         "Пример: parse_skills.py run --source html --mode description\n"
         "Пример: parse_skills.py chart --chart-input top_skills_rf.csv -o chart.png\n"
-        "Пример: parse_skills.py db init --database data/hh.sqlite3"
+        "Пример: parse_skills.py db init --database data/hh.sqlite3\n"
+        "Пример: parse_skills.py collect --areas-source catalog --area-root 113 --area-level leaf"
     )
 
 
@@ -1459,6 +1464,12 @@ def main():
         except (AreaSelectionError, requests.RequestException, ValueError) as error:
             logger.critical(str(error))
             raise SystemExit(2) from error
+        return
+
+    if command in {"collect", "resume"}:
+        from hh_parser.cli import main as research_main
+
+        research_main([command, *command_argv])
         return
 
     # Logging

@@ -92,6 +92,32 @@ class Database:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (migration.name, utc_now()),
                 )
+            self._backfill_repost_keys(connection)
+
+    @staticmethod
+    def _store_repost_key(connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any]) -> None:
+        """Persist relation from one publication revision to its repost key."""
+        from .history import REPOST_KEY_VERSION, repost_key
+
+        connection.execute(
+            "INSERT INTO snapshot_repost_keys(snapshot_id, repost_key, key_version, calculated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(snapshot_id) DO NOTHING",
+            (snapshot_id, repost_key(snapshot), REPOST_KEY_VERSION, utc_now()),
+        )
+
+    def _backfill_repost_keys(self, connection: sqlite3.Connection) -> None:
+        """Assign history keys to snapshots created before history schema existed."""
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='snapshot_repost_keys'"
+        ).fetchone()
+        if table is None:
+            return
+        rows = connection.execute(
+            "SELECT s.* FROM vacancy_snapshots s LEFT JOIN snapshot_repost_keys k ON k.snapshot_id=s.id "
+            "WHERE k.snapshot_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            self._store_repost_key(connection, int(row["id"]), dict(row))
 
     def start_run(
         self,
@@ -356,6 +382,7 @@ class Database:
                 "observed_at = excluded.observed_at",
                 (run_id, str(vacancy_hh_id), snapshot_id, observed_at),
             )
+            self._store_repost_key(tx, snapshot_id, snapshot)
             self._store_snapshot_links(tx, snapshot_id, snapshot)
             return inserted
         if connection is not None:
@@ -586,6 +613,7 @@ class Database:
         "extraction_errors", "extraction_runs", "vacancy_skills", "skill_aliases", "skills",
         "features", "relevance_labels", "snapshot_work_formats", "snapshot_industries",
         "snapshot_roles", "snapshot_key_skills", "vacancy_snapshot_observations",
+        "snapshot_repost_keys",
         "collection_errors", "vacancy_query_hits", "search_pages", "run_areas",
         "vacancy_snapshots", "vacancies", "search_queries", "collection_runs",
         "areas", "area_catalog_versions",

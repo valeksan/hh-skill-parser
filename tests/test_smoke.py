@@ -23,7 +23,8 @@ from hh_parser.areas import (
 )
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
-from hh_parser.extractors.features import extract_features, repost_fingerprint
+from hh_parser.extractors.features import extract_features
+from hh_parser.history import repost_key
 from hh_parser.export import export_query_hits, export_roles, export_skills, export_vacancies
 from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
@@ -326,13 +327,13 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql", "0019_vacancy_history.sql"],
         )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
-                "vacancy_requests",
+                "vacancy_requests", "snapshot_repost_keys",
                 "snapshot_key_skills", "snapshot_roles", "snapshot_industries", "snapshot_work_formats",
                 "features",
                 "skills", "skill_aliases", "vacancy_skills",
@@ -767,29 +768,49 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["publication.age_days"]["value_number"], 3)
         self.assertEqual(features["salary.monthly_rub"]["value_number"], 110000)
 
-    def test_offline_features_detect_repost_by_title_employer_and_text(self):
-        run_id = self.database.start_run({"fixture": "repost"})
-        snapshots = []
-        for vacancy_id in ("repost-1", "repost-2"):
-            self.database.upsert_vacancy(vacancy_id, source="api")
-            snapshot = {
-                "content_hash": f"repost-{vacancy_id}", "title": "Специалист по воинскому учету",
-                "description_text": "Ведение воинского учета сотрудников.", "employer_id": "42",
-                "employer_name": "АО Пример", "source": "api",
-            }
-            self.database.record_snapshot(run_id, vacancy_id, snapshot)
-            snapshots.append(snapshot)
-        self.assertEqual(repost_fingerprint(snapshots[0]), repost_fingerprint(snapshots[1]))
-        run_offline_extraction(self.database, "features")
+    def test_vacancy_history_separates_observation_edit_repost_and_archive(self):
+        first_run = self.database.start_run({"fixture": "history-first"})
+        second_run = self.database.start_run({"fixture": "history-second"})
+        third_run = self.database.start_run({"fixture": "history-third"})
+        first = {
+            "content_hash": "history-v1", "title": "Специалист по воинскому учету",
+            "description_text": "Ведение воинского учета сотрудников.", "employer_id": "42",
+            "employer_name": "АО Пример", "source": "api", "observed_at": "2026-07-01T00:00:00+00:00",
+        }
+        edited = {**first, "content_hash": "history-v2", "description_text": "Воинский учет и бронирование.", "observed_at": "2026-07-03T00:00:00+00:00"}
+        repeated = {**first, "observed_at": "2026-07-02T00:00:00+00:00"}
+        repost = {**edited, "content_hash": "history-repost", "observed_at": "2026-07-04T00:00:00+00:00"}
+        archived = {**first, "content_hash": "history-archived", "archived": 1, "observed_at": "2026-07-05T00:00:00+00:00"}
+        self.database.upsert_vacancy("history-1", source="api")
+        self.database.record_snapshot(first_run, "history-1", first)
+        self.database.record_snapshot(second_run, "history-1", repeated)
+        self.database.record_snapshot(third_run, "history-1", edited)
+        self.database.upsert_vacancy("history-2", source="api")
+        self.database.record_snapshot(third_run, "history-2", repost)
+        self.database.upsert_vacancy("history-3", source="api")
+        self.database.record_snapshot(third_run, "history-3", archived)
+        self.assertEqual(repost_key(edited), repost_key(repost))
         with self.database.connect() as connection:
-            rows = connection.execute(
-                "SELECT name, value_number FROM features WHERE name IN ('duplicate.repost_count', 'duplicate.is_repost') "
-                "ORDER BY snapshot_id, name"
+            snapshots = connection.execute(
+                "SELECT COUNT(*) FROM vacancy_snapshots WHERE vacancy_hh_id='history-1'"
+            ).fetchone()[0]
+            observation = connection.execute(
+                "SELECT last_seen_at FROM vacancy_snapshots WHERE vacancy_hh_id='history-1' AND content_hash='history-v1'"
+            ).fetchone()[0]
+            events = connection.execute(
+                "SELECT history_event, is_content_edit FROM vacancy_history WHERE vacancy_hh_id='history-1' ORDER BY observed_at"
             ).fetchall()
-        self.assertEqual([tuple(row) for row in rows], [
-            ("duplicate.is_repost", 1.0), ("duplicate.repost_count", 2.0),
-            ("duplicate.is_repost", 1.0), ("duplicate.repost_count", 2.0),
-        ])
+            reposts = connection.execute(
+                "SELECT publication_count FROM repost_groups WHERE repost_key=?", (repost_key(edited),)
+            ).fetchone()[0]
+            archived_state = connection.execute(
+                "SELECT archived, history_event FROM vacancy_history WHERE vacancy_hh_id='history-3'"
+            ).fetchone()
+        self.assertEqual(snapshots, 2)
+        self.assertEqual(observation, "2026-07-02T00:00:00+00:00")
+        self.assertEqual([tuple(row) for row in events], [("initial", 0), ("content_edit", 1)])
+        self.assertEqual(reposts, 2)
+        self.assertEqual(tuple(archived_state), (1, "initial"))
 
     def test_offline_skill_extraction_stores_versioned_evidence(self):
         skills_path = Path(self.temp_dir.name) / "skills.txt"

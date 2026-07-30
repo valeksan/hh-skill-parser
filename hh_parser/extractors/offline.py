@@ -8,7 +8,7 @@ from relevance import VERSION as RELEVANCE_VERSION, classify_relevance
 
 from ..skill_dictionary import SkillDictionary, topic_family
 from ..storage import Database
-from .features import VERSION as FEATURES_VERSION, extract_features, repost_fingerprint
+from .features import VERSION as FEATURES_VERSION, extract_features
 
 
 def extract(
@@ -30,10 +30,6 @@ def extract(
     selection = {"snapshot_scope": snapshot_scope, "run_ids": run_ids or [], "area_ids": area_ids or [],
                  "source": source, "date_from": date_from, "date_to": date_to}
     snapshots = database.selected_snapshots(**selection)
-    repost_groups: dict[str, set[str]] = {}
-    if kind == "features":
-        for snapshot in snapshots:
-            repost_groups.setdefault(repost_fingerprint(snapshot), set()).add(str(snapshot["vacancy_hh_id"]))
     extraction_run_id = database.start_extraction_run(kind, version, selection, len(snapshots))
     skill_ids = database.sync_skill_dictionary(skill_dictionary.aliases, version, topic_family) if skill_dictionary else {}
     processed = errors = 0
@@ -44,8 +40,7 @@ def extract(
                 label, score, reasons = classify_relevance(snapshot["title"], snapshot.get("description_text") or "")
                 database.upsert_auto_relevance(snapshot_id, label, score, reasons, version)
             elif kind == "features":
-                repost_count = len(repost_groups[repost_fingerprint(snapshot)])
-                database.upsert_features(snapshot_id, extract_features(snapshot, repost_count=repost_count), version)
+                database.upsert_features(snapshot_id, extract_features(snapshot), version)
             else:
                 matches = []
                 for match_source, text in (("title", snapshot.get("title") or ""), ("description", snapshot.get("description_text") or "")):

@@ -58,6 +58,13 @@ class HHApiSource:
         items, _ = self.search_page(expression, area_id, page=0, per_page=per_page)
         return items
 
+    def areas(self) -> list[dict[str, Any]]:
+        """Fetch official geographic area catalog."""
+        payload = self._get("/areas").json()
+        if not isinstance(payload, list):
+            raise ValueError("HH API areas response must be a list")
+        return payload
+
     def search_page(
         self, expression: str, area_id: str, *, page: int, per_page: int = 100,
         date_from: str | None = None, date_to: str | None = None,

@@ -12,7 +12,10 @@ from typing import Any
 
 import requests
 
-from .areas import AreaSelectionError, find_overlaps, load_area_file, select_catalog_areas, validate_area_ids
+from .areas import (
+    AreaSelectionError, find_overlaps, load_area_file, select_catalog_areas,
+    validate_area_ids,
+)
 from .collector import Collector
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
@@ -99,6 +102,23 @@ def build_parser() -> argparse.ArgumentParser:
     import_commands = labeling_import.add_subparsers(dest="import_command", required=True)
     labeling_import_csv = import_commands.add_parser("labeling", help="import reviewed relevance-labeling CSV")
     labeling_import_csv.add_argument("path")
+
+    areas = commands.add_parser("areas", help="manage versioned HH area catalog")
+    areas.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    areas_commands = areas.add_subparsers(dest="areas_command", required=True)
+    areas_sync = areas_commands.add_parser("sync", help="fetch and store official HH /areas catalog")
+    areas_sync.add_argument("--root", default="113")
+    areas_sync.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
+    areas_sync.add_argument("--request-timeout", type=float, default=30.0)
+    areas_list = areas_commands.add_parser("list", help="list a frozen catalog selection")
+    areas_list.add_argument("--catalog-version", type=int)
+    areas_list.add_argument("--root", default="113")
+    areas_list.add_argument("--level", choices=["root", "children", "leaf"], default="root")
+    areas_validate = areas_commands.add_parser("validate", help="validate explicit area IDs against catalog")
+    areas_validate.add_argument("--catalog-version", type=int)
+    areas_validate.add_argument("--area", action="append", default=[])
+    areas_validate.add_argument("--areas-file")
+    areas_validate.add_argument("--allow-area-overlap", action="store_true")
     return parser
 
 
@@ -144,7 +164,7 @@ def make_source(settings: argparse.Namespace) -> HHApiSource:
     """Create public API transport; token is never passed to run config."""
     return HHApiSource(
         user_agent=settings.user_agent, timeout=settings.request_timeout,
-        access_token=settings.access_token or None,
+        access_token=getattr(settings, "access_token", None) or None,
     )
 
 
@@ -228,6 +248,51 @@ def run_import_labeling(settings: argparse.Namespace) -> int:
     return import_labeling(database, settings.path)
 
 
+def run_areas_sync(
+    settings: argparse.Namespace, *, source_factory: Callable[[argparse.Namespace], Any] = make_source,
+) -> int:
+    """Fetch and version official HH geographic tree."""
+    database = Database(settings.database)
+    database.migrate()
+    source = source_factory(settings)
+    catalog_id = database.store_area_catalog(
+        source.areas(), source_url=f"{getattr(source, 'base_url', HHApiSource.base_url)}/areas",
+    )
+    _, catalog = database.load_area_catalog(catalog_id)
+    validate_area_ids([settings.root], catalog)
+    return catalog_id
+
+
+def run_areas_list(settings: argparse.Namespace) -> list[dict[str, str]]:
+    """Return deterministic area list for one frozen catalog version."""
+    database = Database(settings.database)
+    database.migrate()
+    catalog_id, catalog = database.load_area_catalog(settings.catalog_version)
+    selected = select_catalog_areas(catalog, settings.root, settings.level)
+    return [
+        {"catalog_version": str(catalog_id), "id": area_id, "name": catalog[area_id].name}
+        for area_id in selected
+    ]
+
+
+def run_areas_validate(settings: argparse.Namespace) -> list[str]:
+    """Validate CLI/file area selection before collection network work."""
+    if settings.area and settings.areas_file:
+        raise AreaSelectionError("--area and --areas-file cannot be combined")
+    values = list(settings.area) if settings.area else load_area_file(settings.areas_file) if settings.areas_file else []
+    if not values:
+        raise AreaSelectionError("specify --area or --areas-file")
+    database = Database(settings.database)
+    database.migrate()
+    _, catalog = database.load_area_catalog(settings.catalog_version)
+    validate_area_ids(values, catalog)
+    overlaps = find_overlaps(values, catalog)
+    if overlaps and not settings.allow_area_overlap:
+        pairs = ", ".join(f"{parent}/{child}" for parent, child in overlaps)
+        raise AreaSelectionError(f"overlapping selected areas: {pairs}; pass --allow-area-overlap")
+    return values
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run collect/resume command and print machine-readable result."""
     argv = argv if argv is not None else os.sys.argv[1:]
@@ -252,6 +317,13 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps({"run_id": settings.run_id, **counters}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "export":
             print(json.dumps({"rows": run_export_labeling(settings)}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "areas":
+            if settings.areas_command == "sync":
+                print(json.dumps({"catalog_version": run_areas_sync(settings)}, sort_keys=True))
+            elif settings.areas_command == "list":
+                print(json.dumps(run_areas_list(settings), ensure_ascii=False, sort_keys=True))
+            else:
+                print(json.dumps({"area_ids": run_areas_validate(settings)}, ensure_ascii=False, sort_keys=True))
         else:
             print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:

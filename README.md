@@ -22,6 +22,9 @@ python -m unittest tests.test_smoke
 ## Запуск
 
 ```bash
+# Сначала сохранить versioned каталог регионов.
+hh-skill-parser areas sync
+
 # Новая DB-backed коллекция. --area можно повторять.
 hh-skill-parser collect --area 1 --area 2 --area 13 --area 7
 

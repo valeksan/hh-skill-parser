@@ -35,7 +35,7 @@ full = [
 ]
 
 [project.scripts]
-hh-skill-parser = "parse_skills:main"
+hh-skill-parser = "hh_parser.cli:main"
 
 [tool.setuptools]
 py-modules = ["parse_skills"]

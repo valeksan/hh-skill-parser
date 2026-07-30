@@ -92,11 +92,11 @@ Multivalue `work_format_json` остаётся стабильным JSON; indust
 
 **Качество производных признаков.**
 
-- [ ] Добавить golden проверки time/geography/employer/salary/topic/skill slices.
-- [ ] Проверить monthly RUB только при известной frequency/rate; неизвестное не
+- [x] Добавить golden проверки time/geography/employer/salary/topic/skill slices.
+- [x] Проверить monthly RUB только при известной frequency/rate; неизвестное не
   конвертировать предположением.
-- [ ] Добавить явные missing-data reasons для каждого поля, используемого в DA.
-- [ ] Оценить manual-label ошибки relevance extractor после pilot и версионировать
+- [x] Добавить явные missing-data reasons для каждого поля, используемого в DA.
+- [x] Оценить manual-label ошибки relevance extractor после pilot и версионировать
   согласованные изменения правил.
 
 Приёмка:
@@ -104,3 +104,11 @@ Multivalue `work_format_json` остаётся стабильным JSON; indust
 - каждое автоматическое решение имеет version, reasons и evidence;
 - пропуск отличается от нулевого значения;
 - повторная extraction идемпотентна.
+
+Результат: `features` v5 сохраняет availability reason для publication, salary
+midpoint и monthly RUB; monthly RUB допускается только для RUB/RUR с явно
+месячной frequency (FX rate не предполагается). Normalization сохраняет status
+и missing reason всех полей DA; `export marts` выдаёт `missing_data.csv` по
+полю и причине. `pilot report` выдаёт versioned confusion/evidence auto vs
+manual labels. Golden fixture покрывает time/geography/employer/salary/topic/
+skill marts и повторный features extract.

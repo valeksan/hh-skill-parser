@@ -17,7 +17,7 @@
 resume, API pagination, разбиение насыщенных дат, сохранение hits до карточек,
 нормализация и redaction, история snapshots, offline extractors, labeling,
 skill discovery/review, FTS, CSV exports, stats и безопасные DB maintenance
-команды. На текущем состоянии проходят 75 тестов:
+команды. На текущем состоянии проходят 91 тест:
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
@@ -48,7 +48,7 @@ git history.
      улучшить discovery и сохранять историю review.
    - [x] [ANA-3](da_mobilization_analysis_plan.md#ana-3):
      добавить недостающие DA-витрины и воспроизводимые экспорты.
-   - [ ] [ANA-4](da_mobilization_analysis_plan.md#ana-4):
+   - [x] [ANA-4](da_mobilization_analysis_plan.md#ana-4):
      закрепить качество производных признаков golden-проверками.
 
 3. **P2 — готовность к регулярным запускам**

@@ -820,6 +820,48 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["publication.age_days"]["value_number"], 3)
         self.assertEqual(features["salary.monthly_rub"]["value_number"], 110000)
 
+    def test_features_do_not_assume_monthly_rub_or_missing_values(self):
+        features = {item["name"]: item for item in extract_features({
+            "title": "Специалист", "description_text": "", "work_formats": [],
+            "salary_from": 100, "salary_currency": "USD", "salary_frequency": None,
+        })}
+        self.assertNotIn("salary.monthly_rub", features)
+        self.assertEqual(features["salary.monthly_rub.availability"]["value_text"], "unsupported_or_missing_currency")
+        self.assertEqual(features["publication.availability"]["value_text"], "invalid_or_missing_timestamp")
+
+    def test_ana4_golden_slices_and_idempotent_features(self):
+        run_id = self.database.start_run({"fixture": "ana4-golden"})
+        self.database.upsert_vacancy("ana4-1", source="api")
+        snapshot = normalize_api_vacancy({
+            "id": "ana4-1", "name": "Главный специалист по воинскому учету",
+            "description": "Воинский учет и бронирование сотрудников",
+            "published_at": "2026-07-01T12:00:00+03:00",
+            "employer": {"id": "42", "name": "АО Пример", "type": "company"},
+            "area": {"id": "30", "name": "Новосибирск"},
+            "salary": {"from": 100000, "to": 120000, "currency": "RUB", "frequency": "MONTH"},
+            "key_skills": [{"name": "Воинский учет"}],
+        }, geography={"federal_district": "СФО", "federal_subject": "Новосибирская область", "locality": "Новосибирск"})
+        self.database.record_snapshot(run_id, "ana4-1", snapshot)
+        snapshot_id = self.database.snapshot_id("ana4-1", snapshot["content_hash"])
+        self.database.upsert_auto_relevance(snapshot_id, "relevant", 1.0, ["signal:воинск"], "test")
+        dictionary = Path(self.temp_dir.name) / "ana4-skills.txt"
+        dictionary.write_text("воинский учет\n", encoding="utf-8")
+        run_offline_extraction(self.database, "features")
+        run_offline_extraction(self.database, "features")
+        run_offline_extraction(self.database, "skills", skill_dictionary=load_skill_dictionary(dictionary))
+        output = Path(self.temp_dir.name) / "ana4-marts"
+        export_marts(self.database, output)
+        with self.database.connect() as connection:
+            self.assertEqual(connection.execute("SELECT publication_day FROM publication_time_series").fetchone()[0], "2026-07-01")
+            self.assertEqual(connection.execute("SELECT federal_subject FROM vacancy_geography").fetchone()[0], "Новосибирская область")
+            self.assertEqual(connection.execute("SELECT employer_id FROM vacancy_employers").fetchone()[0], "42")
+            self.assertEqual(connection.execute("SELECT salary_midpoint FROM vacancy_salary").fetchone()[0], 110000)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM features WHERE name='salary.monthly_rub'").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM vacancy_skill_matrix").fetchone()[0], 2)
+        with (output / "missing_data.csv").open(encoding="utf-8", newline="") as handle:
+            missing_rows = list(csv.DictReader(handle))
+        self.assertIn({"field": "salary_frequency", "missing_reason": "present", "vacancy_count": "1"}, missing_rows)
+
     def test_vacancy_history_separates_observation_edit_repost_and_archive(self):
         first_run = self.database.start_run({"fixture": "history-first"})
         second_run = self.database.start_run({"fixture": "history-second"})
@@ -1836,6 +1878,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual({row["query_family"] for row in report["query_families"]}, {"strong_markers", "stable_phrases", "controlled"})
         self.assertTrue(report["selection_version"])
         self.assertTrue(report["label_set_version"])
+        self.assertEqual(report["relevance_extractor"]["versions"], ["test"])
+        self.assertEqual(report["relevance_extractor"]["disagreements"], 4)
 
     def test_toml_config_maps_to_cli_defaults_and_rejects_unknown_keys(self):
         with tempfile.TemporaryDirectory() as temp_dir:

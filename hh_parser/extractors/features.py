@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-VERSION = "4"
+VERSION = "5"
 
 TOPICS = {
     "mobilization": (r"мобилизац",),
@@ -81,6 +81,9 @@ def extract_features(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     values = [value for value in (snapshot.get("salary_from"), snapshot.get("salary_to")) if value is not None]
     if values:
         features.append(_feature("salary.midpoint", "number", sum(values) / len(values)))
+        features.append(_feature("salary.midpoint.availability", "text", "available"))
+    else:
+        features.append(_feature("salary.midpoint.availability", "text", "missing_salary_bounds"))
     for source, target in (("employment_id", "employment.id"), ("experience_id", "experience.id"), ("schedule_id", "schedule.id")):
         if snapshot.get(source):
             features.append(_feature(target, "text", snapshot[source]))
@@ -98,8 +101,19 @@ def extract_features(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 "publication.age_days", "number",
                 max(0, (observed_time.astimezone(timezone.utc).date() - published_time.astimezone(timezone.utc).date()).days),
             ))
+        features.append(_feature("publication.availability", "text", "available"))
+    else:
+        features.append(_feature("publication.availability", "text", "invalid_or_missing_timestamp"))
     monthly_frequency = str(snapshot.get("salary_frequency") or "").casefold()
     rub_currency = str(snapshot.get("salary_currency") or "").upper() in {"RUB", "RUR"}
     if values and rub_currency and monthly_frequency in {"month", "monthly", "месяц"}:
         features.append(_feature("salary.monthly_rub", "number", sum(values) / len(values)))
+        features.append(_feature("salary.monthly_rub.availability", "text", "available"))
+    elif not values:
+        features.append(_feature("salary.monthly_rub.availability", "text", "missing_salary_bounds"))
+    elif not rub_currency:
+        # No FX table exists in this offline corpus: do not invent a RUB rate.
+        features.append(_feature("salary.monthly_rub.availability", "text", "unsupported_or_missing_currency"))
+    elif monthly_frequency not in {"month", "monthly", "месяц"}:
+        features.append(_feature("salary.monthly_rub.availability", "text", "unknown_or_nonmonthly_frequency"))
     return features

@@ -3,8 +3,16 @@
 Сбор и анализ вакансий, связанных с мобилизационной подготовкой, воинским
 учётом, бронированием, ГО/ЧС и режимно-секретной работой.
 
-Workflow: package CLI `hh-skill-parser`: публичный JSON API HH.ru → SQLite →
-offline processing → exports. SQLite — source of truth.
+Основной процесс CLI-пакета `hh-skill-parser`: публичный JSON API HH.ru →
+SQLite → офлайн-обработка → экспорт. SQLite — источник истины.
+
+## Архитектура
+
+![Архитектура: источники HH.ru → сбор → SQLite → офлайн-обработка → аналитика и эксплуатация](docs/images/architecture.png)
+
+Сеть нужна только для `areas sync`, `collect`, `resume` и `retry`. Все
+извлечения, проверка результатов, экспорт, статистика и обслуживание БД работают
+из SQLite.
 
 ## Установка
 
@@ -18,33 +26,33 @@ pip install -e .
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
-# same command through Makefile:
+# Та же команда через Makefile:
 make test
 ```
 
 ## Запуск
 
 ```bash
-# Сначала сохранить versioned каталог регионов.
+# Сначала сохранить версионируемый каталог регионов.
 hh-skill-parser areas sync
 
-# Новая DB-backed коллекция. --area можно повторять.
-# Первый incremental range задаёт нижнюю границу; без неё собирается только today.
-# Последующие идут от compatible watermark с overlap (default: 1 day).
+# Новая коллекция с SQLite. --area можно повторять.
+# Первый инкрементальный интервал задаёт нижнюю границу; без него собираются вакансии только за текущий день.
+# Следующие запуски используют совместимую контрольную дату с перекрытием в один день.
 hh-skill-parser collect --area 1 --area 2 --area 13 --area 7 --date-from 2026-01-01
 
 # Либо использовать проверяемый файл HH area ID.
 hh-skill-parser areas validate --areas-file areas.txt
 hh-skill-parser collect --areas-file areas.txt
 
-# HTML — отдельный явный source, без API→HTML fallback.
+# HTML — отдельный явно выбранный источник, без автоматического перехода от API к HTML.
 # Каталог областей предварительно синхронизируется через API.
 hh-skill-parser collect --source html --area 1 --date-from 2026-01-01
 
-# Продолжение того же run после сбоя.
+# Продолжение того же запуска после сбоя.
 hh-skill-parser resume --run-id RUN_ID
 
-# Full — отдельный historical range; старые snapshots не удаляет.
+# `full` — отдельный исторический интервал; старые snapshots не удаляет.
 hh-skill-parser collect --collection-mode full --area 1 --date-from 2025-01-01 --date-to 2025-12-31
 
 # Производные данные строятся отдельно, только из SQLite, без запросов к HH.
@@ -57,20 +65,20 @@ hh-skill-parser export vacancies --output vacancies.csv --snapshot latest --rele
 hh-skill-parser export skills --output vacancy_skills.csv
 hh-skill-parser export marts --output-dir marts --relevance relevant
 
-# ANA-1: fixed 100-row pilot, then manually fill labels and import CSV.
+# ANA-1: фиксированная выборка из 100 строк, затем вручную заполнить labels и импортировать CSV.
 hh-skill-parser pilot create --batch-id 2026-07-30-v1 --output pilot.csv
 hh-skill-parser import labeling pilot.csv
 hh-skill-parser pilot report --batch-id 2026-07-30-v1 --output pilot-report.json
 
-# JSON counts по той же offline выборке.
+# Счётчики JSON по той же офлайн-выборке.
 hh-skill-parser stats --snapshot latest --query-family military
 ```
 
-Run ID и счётчики печатаются в JSON. Область, страницы, hits, snapshots и ошибки
-сохраняются в SQLite; повторный запуск не требует удаления progress-файлов.
-Watermark продвигается только после полного successful incremental run; degraded
-run оставляет его прежним. `full` не очищает history и не меняет incremental
-watermark.
+Идентификатор запуска и счётчики печатаются в JSON. Область, страницы, найденные
+вакансии, snapshots и ошибки сохраняются в SQLite; повторный запуск не требует
+удаления progress-файлов. Watermark продвигается только после полного успешного
+инкрементального запуска; degraded run оставляет его прежним. `full` не очищает
+history и не меняет incremental watermark.
 `extract` по умолчанию обрабатывает latest snapshot каждой вакансии. Фильтры
 `--run-id`, `--area`, `--source`, `--date-from/--date-to` ограничивают выборку.
 Автоматические labels/features/skills не выполняются при `collect`/`resume`.
@@ -82,7 +90,7 @@ watermark.
 только по сохранённому batch и manual labels. `unknown`/blank не входят в binary metrics.
 HTML anti-bot/interstitial страница сохраняется как ошибка run, не как вакансия.
 
-## Первый запуск, resume и coverage
+## Первый запуск, возобновление и coverage
 
 `areas sync` требует сети и создаёт versioned catalog. После этого выберите
 explicit IDs либо catalog selection; collect сохраняет query specs, areas и
@@ -100,36 +108,37 @@ hh-skill-parser retry --run-id 42 --max-attempts 3
 hh-skill-parser coverage --run-id 42
 ```
 
-`coverage` читает persisted search/card units, сеть не вызывает. `completed`
-означает обработанные units, не полноту всех результатов HH: API pagination
-ограничена `--max-pages`, насыщенные интервалы режутся до
+`coverage` читает сохранённые единицы поиска и загрузки карточек, сеть не
+вызывает. `completed` означает обработанные единицы, не полноту всех результатов
+HH: API pagination ограничена `--max-pages`, насыщенные интервалы режутся до
 `--date-slice-min-days`, а failed/saturated/missing cards остаются видимыми в
 coverage и errors. `degraded`/partial run нельзя считать полным корпусом.
 
-## Offline reprocessing и review
+## Офлайн-переобработка и ручная проверка
 
 Все эти команды читают SQLite, не меняют collection counters/status и не ходят
 в HH. После изменения extractor, dictionary или ручных labels можно безопасно
-повторить их на том же corpus:
+повторить их на том же наборе данных:
 
 ```bash
 hh-skill-parser extract relevance
 hh-skill-parser extract --snapshot all features
 hh-skill-parser extract --skills-file skills_whitelist.txt skills
 
-# Manual relevance review.
+# Ручная проверка релевантности.
 hh-skill-parser export labeling --output labels.csv --sample-size 100 --sample-seed 20260730
-# Fill only supported label/reason columns, then:
+# Заполните только поддерживаемые колонки label/reason, затем:
 hh-skill-parser import labeling labels.csv
 
-# Fixed pilot: selection and filters persist in SQLite; report is reproducible.
+# Фиксированная выборка: выборка и filters сохраняются в SQLite; report воспроизводим.
 hh-skill-parser pilot create --batch-id 2026-07-30-v1 --output pilot.csv
 hh-skill-parser import labeling pilot.csv
 hh-skill-parser pilot report --batch-id 2026-07-30-v1 --output pilot-report.json
 ```
 
-Skill discovery is review-first: command exports evidence, never mutates current
-dictionary. `approve|reject|merge` decisions produce a new dictionary only.
+Поиск новых навыков начинается с ручной проверки: команда экспортирует evidence
+и никогда не меняет текущий dictionary. Решения `approve|reject|merge` создают
+только новый dictionary.
 
 ```bash
 hh-skill-parser discover skills --batch-id review-2026-07 --output skill_candidates.csv
@@ -138,39 +147,39 @@ hh-skill-parser import skill-candidates skill_candidates.csv \
 hh-skill-parser extract --skills-file skills_whitelist.v2.txt skills
 ```
 
-## DA marts, manifest и data dictionary
+## DA-витрины, manifest и словарь данных
 
-`export marts` создаёт CSV bundle только из SQLite. `manifest.json` фиксирует
-время генерации, DB path, migrations, filters, contributing runs/config hashes,
+`export marts` создаёт набор CSV только из SQLite. `manifest.json` фиксирует
+время генерации, путь к БД, migrations, filters, contributing runs/config hashes,
 dictionary versions, row counts и SHA-256 каждого output. Сохраняйте manifest
 вместе с отчётом; повторяйте export с теми же filters для сравнения.
 
 ```bash
-# Relevant latest snapshots for one run/area/query family.
+# Relevant latest snapshots для одного запуска, региона и query family.
 hh-skill-parser export marts --output-dir marts-42 --run-id 42 --area 1 \
   --relevance relevant --query-family military
 
-# SQL examples against SQLite DB.
+# Примеры SQL-запросов к SQLite DB.
 sqlite3 hh_mobilization.sqlite3 \
   "SELECT publication_day, vacancy_count FROM publication_time_series ORDER BY publication_day;"
 sqlite3 hh_mobilization.sqlite3 \
   "SELECT q.query_group, COUNT(DISTINCT h.vacancy_hh_id) AS hits FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id GROUP BY q.query_group ORDER BY hits DESC;"
 ```
 
-| Object | Meaning |
+| Объект | Назначение |
 | --- | --- |
-| `collection_runs` | Frozen collection scope, status, counters, config hash. |
-| `vacancy_query_hits` | Search hit before card load; evidence for recall/coverage. |
-| `vacancy_snapshots` | Redacted normalized vacancy versions; latest view selects current one. |
-| `effective_relevance_labels` | Manual label if present, otherwise automatic label. |
-| `vacancy_skills` / `vacancy_skill_matrix` | Dictionary/extractor evidence for normalized skills. |
-| `vacancy_history`, `repost_groups` | Observed edits, archive state, potential repost grouping. |
-| Reporting views / marts CSV | Derived reporting datasets; not collection source. |
+| `collection_runs` | Зафиксированный scope сбора, status, counters и config hash. |
+| `vacancy_query_hits` | Попадание поиска до загрузки карточки; evidence для recall/coverage. |
+| `vacancy_snapshots` | Redacted normalized versions вакансии; latest view выбирает текущую. |
+| `effective_relevance_labels` | Manual label при наличии, иначе automatic label. |
+| `vacancy_skills` / `vacancy_skill_matrix` | Evidence dictionary/extractor для нормализованных skills. |
+| `vacancy_history`, `repost_groups` | Наблюдаемые edits, archive state, potential repost grouping. |
+| Reporting views / marts CSV | Производные reporting datasets, не collection source. |
 
-Marts include publication trends, geography, employers, industries, topics and
-skills, skill co-occurrence, salary, employment, edits, reposts, missing data,
-query noise and persisted coverage errors. `top_skills_rf.csv` in mart bundle is
-SQLite-derived compatibility export.
+Marts включают динамику публикаций, географию, работодателей, отрасли, темы и
+skills, совместную встречаемость skills, зарплаты, занятость, edits, reposts,
+пропуски данных, query noise и сохранённые coverage errors.
+`top_skills_rf.csv` в наборе marts — SQLite-derived compatibility export.
 
 Регулярный запуск: incremental ежедневно/по расписанию внешним scheduler; full —
 отдельно, периодически, с явным historical range. Встроенного scheduler нет:
@@ -180,7 +189,7 @@ hh-skill-parser collect --area 1 --area 2 --date-from 2026-01-01
 hh-skill-parser collect --collection-mode full --area 1 --date-from 2026-01-01 --date-to 2026-06-30
 ```
 
-## Конфигурация DB-backed CLI
+## Конфигурация CLI с SQLite
 
 Скопируйте `config.example.toml` в `config.toml`. Реальный token в example не
 хранится. Приоритет настроек: явный CLI argument → environment → TOML → built-in

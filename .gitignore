@@ -214,4 +214,5 @@ progress.json
 config.toml
 *.png
 *.csv
+!docs/images/architecture.png
 /local_docs/

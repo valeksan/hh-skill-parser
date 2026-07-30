@@ -52,6 +52,15 @@ Run ID и счётчики печатаются в JSON. Область, стр�
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
 
+Skill discovery review создаёт новый dictionary file, исходный не меняет:
+
+```bash
+hh-skill-parser discover skills --output skill_candidates.csv
+# Заполнить decision: approve|reject|merge, затем:
+hh-skill-parser import skill-candidates skill_candidates.csv \
+  --skills-file skills_whitelist.txt --output skills_whitelist.v2.txt
+```
+
 ## Очистка raw payload
 
 Сканированные snapshots, hits, labels, features и exports команда не удаляет.

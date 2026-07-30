@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .skill_dictionary import SkillDictionary
+from .skill_dictionary import SkillDictionary, load_skill_dictionary
 from .storage import Database
 
 FIELDS = ("candidate", "normalized", "source", "document_count", "relevance_lift", "strata_coverage", "example_hh_ids", "example_titles", "evidence", "decision", "canonical_skill", "topic_family", "reviewer_reason")
@@ -87,3 +87,54 @@ def export_skill_candidates(rows: list[dict[str, Any]], path: str | Path) -> int
         writer.writeheader()
         writer.writerows(rows)
     return len(rows)
+
+
+def import_skill_candidates(review_path: str | Path, dictionary_path: str | Path, output_path: str | Path) -> int:
+    """Apply reviewed candidates into a new immutable dictionary file."""
+    source = Path(dictionary_path)
+    output = Path(output_path)
+    if source.resolve() == output.resolve():
+        raise ValueError("--output must differ from --skills-file; dictionary versions are immutable")
+    if output.exists():
+        raise ValueError("--output already exists; dictionary versions are immutable")
+    dictionary = SkillDictionary(dict(load_skill_dictionary(source).aliases), "")
+    aliases = dict(dictionary.aliases)
+    with Path(review_path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"candidate", "decision", "canonical_skill"}
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise ValueError("skill candidate CSV requires candidate, decision, canonical_skill columns")
+        rows = list(reader)
+    handled: set[str] = set()
+    applied = 0
+    for row in rows:
+        candidate = normalize_candidate(row.get("candidate") or "")
+        decision = (row.get("decision") or "").strip().casefold()
+        if not decision:
+            continue
+        if decision not in {"approve", "reject", "merge"}:
+            raise ValueError(f"invalid candidate decision: {decision}")
+        if not candidate or candidate in handled:
+            raise ValueError("candidate decisions must be non-empty and unique")
+        handled.add(candidate)
+        if decision == "reject":
+            continue
+        canonical = normalize_candidate(row.get("canonical_skill") or candidate)
+        if not canonical:
+            raise ValueError("approve/merge requires canonical_skill")
+        if decision == "merge" and canonical not in set(aliases.values()):
+            raise ValueError(f"merge target is not an existing canonical skill: {canonical}")
+        existing = aliases.get(candidate)
+        if existing is not None and existing != canonical:
+            raise ValueError(f"candidate alias {candidate!r} already belongs to {existing!r}")
+        aliases[canonical] = canonical
+        aliases[candidate] = canonical
+        applied += 1
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for alias, canonical in aliases.items():
+        grouped[canonical].append(alias)
+    lines = []
+    for canonical in sorted(grouped):
+        lines.append(" | ".join([canonical, *sorted(alias for alias in grouped[canonical] if alias != canonical)]))
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return applied

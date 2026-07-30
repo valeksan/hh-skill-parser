@@ -22,12 +22,12 @@ from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
 from hh_parser.extractors.features import extract_features, repost_fingerprint
 from hh_parser.export import export_vacancies
-from hh_parser.discovery import discover_skill_candidates
+from hh_parser.discovery import discover_skill_candidates, import_skill_candidates
 from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_db, run_discover, run_import_labeling, run_extract, run_export_vacancies, run_maintenance, run_stats,
+    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_vacancies, run_maintenance, run_stats,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -515,6 +515,27 @@ class DatabaseTests(unittest.TestCase):
             "--skills-file", str(skills_file), "--min-document-frequency", "2",
         ])
         self.assertGreater(run_discover(settings), 0)
+
+    def test_skill_candidate_import_writes_new_dictionary_without_mutating_source(self):
+        source = Path(self.temp_dir.name) / "skills.txt"
+        source.write_text("воинский учет | военный учет\n", encoding="utf-8")
+        review = Path(self.temp_dir.name) / "review.csv"
+        review.write_text(
+            "candidate,decision,canonical_skill\nновая технология,approve,новая технология\nкадровый резерв,merge,воинский учет\nшум,reject,\n",
+            encoding="utf-8",
+        )
+        output = Path(self.temp_dir.name) / "skills-v2.txt"
+        self.assertEqual(import_skill_candidates(review, source, output), 2)
+        self.assertEqual(source.read_text(encoding="utf-8"), "воинский учет | военный учет\n")
+        dictionary = load_skill_dictionary(output)
+        self.assertEqual(dictionary.aliases["кадровый резерв"], "воинский учет")
+        self.assertEqual(dictionary.aliases["новая технология"], "новая технология")
+        output_cli = Path(self.temp_dir.name) / "skills-v3.txt"
+        settings = build_research_parser().parse_args([
+            "import", "--database", str(self.database.path), "skill-candidates", str(review),
+            "--skills-file", str(source), "--output", str(output_cli),
+        ])
+        self.assertEqual(run_import_skill_candidates(settings), 2)
 
     def test_fixture_collection_is_idempotent(self):
         run_id = self.database.start_run({"area": 1, "source": "api"}, source_policy="auto")

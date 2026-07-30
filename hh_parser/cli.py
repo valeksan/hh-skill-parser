@@ -17,7 +17,7 @@ from .areas import (
     validate_area_ids,
 )
 from .collector import Collector
-from .discovery import discover_skill_candidates, export_skill_candidates
+from .discovery import discover_skill_candidates, export_skill_candidates, import_skill_candidates
 from .extractors.offline import extract as run_extraction
 from .export import export_vacancies
 from .config import cli_defaults, load_config
@@ -176,6 +176,10 @@ def build_parser() -> argparse.ArgumentParser:
     import_commands = labeling_import.add_subparsers(dest="import_command", required=True)
     labeling_import_csv = import_commands.add_parser("labeling", help="import reviewed relevance-labeling CSV")
     labeling_import_csv.add_argument("path")
+    candidates_import = import_commands.add_parser("skill-candidates", help="apply reviewed skill candidates to new dictionary")
+    candidates_import.add_argument("path")
+    candidates_import.add_argument("--skills-file", required=True)
+    candidates_import.add_argument("--output", required=True)
 
     areas = commands.add_parser("areas", help="manage versioned HH area catalog")
     areas.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
@@ -375,6 +379,10 @@ def run_discover(settings: argparse.Namespace) -> int:
     return export_skill_candidates(rows, settings.output)
 
 
+def run_import_skill_candidates(settings: argparse.Namespace) -> int:
+    return import_skill_candidates(settings.path, settings.skills_file, settings.output)
+
+
 def run_import_labeling(settings: argparse.Namespace) -> int:
     """Apply reviewed labels from CSV without overwriting automatic labels."""
     database = Database(settings.database)
@@ -482,8 +490,11 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(run_db(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "discover":
             print(json.dumps({"rows": run_discover(settings)}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "import":
+            rows = run_import_labeling(settings) if settings.import_command == "labeling" else run_import_skill_candidates(settings)
+            print(json.dumps({"rows": rows}, ensure_ascii=False, sort_keys=True))
         else:
-            print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
+            raise SystemExit("error: unsupported command")
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:
         raise SystemExit(f"error: {error}") from error
 

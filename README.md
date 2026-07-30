@@ -98,10 +98,10 @@ hh-skill-parser collect --config config.toml --areas-file areas.txt
 Skill discovery review создаёт новый dictionary file, исходный не меняет:
 
 ```bash
-hh-skill-parser discover skills --output skill_candidates.csv
+hh-skill-parser discover skills --batch-id review-2026-07 --output skill_candidates.csv
 # Заполнить decision: approve|reject|merge, затем:
 hh-skill-parser import skill-candidates skill_candidates.csv \
-  --skills-file skills_whitelist.txt --output skills_whitelist.v2.txt
+  --skills-file skills_whitelist.txt --output skills_whitelist.v2.txt --batch-id review-2026-07
 ```
 
 ## Очистка raw payload

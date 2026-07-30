@@ -328,7 +328,7 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql", "0019_vacancy_history.sql", "0020_relevance_pilots.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql", "0013_da_views.sql", "0014_vacancy_text_fts.sql", "0015_timestamp_offsets.sql", "0016_collection_watermarks.sql", "0017_collection_coverage.sql", "0018_vacancy_requests.sql", "0019_vacancy_history.sql", "0020_relevance_pilots.sql", "0021_skill_discovery_reviews.sql"],
         )
         self.assertTrue(
             {
@@ -341,6 +341,7 @@ class DatabaseTests(unittest.TestCase):
                 "extraction_runs", "extraction_errors",
                 "collection_watermarks",
                 "relevance_pilot_batches", "relevance_pilot_items",
+                "skill_review_batches", "skill_review_candidates", "skill_candidate_reviews",
             }.issubset(tables)
         )
 
@@ -591,6 +592,32 @@ class DatabaseTests(unittest.TestCase):
             "--skills-file", str(source), "--output", str(output_cli),
         ])
         self.assertEqual(run_import_skill_candidates(settings), 2)
+
+    def test_skill_discovery_persists_review_and_hides_unchanged_reject(self):
+        run_id = self.database.start_run({"fixture": "skill-review"})
+        query_id = self.database.upsert_query("мобилизация", query_group="strong")
+        for vacancy_id, area in (("review-1", 1), ("review-2", 2)):
+            self.database.upsert_vacancy(vacancy_id, source="api")
+            self.database.record_query_hit(run_id, query_id, vacancy_id, area_id=area, page=0, rank=0)
+            self.database.record_snapshot(run_id, vacancy_id, {
+                "content_hash": f"review-{vacancy_id}", "title": "Специалист", "source": "api", "area_id": area,
+                "published_at": f"2026-0{area}-01", "description_text": "Редкий навык для учета",
+            })
+            self.database.upsert_auto_relevance(
+                self.database.snapshot_id(vacancy_id, f"review-{vacancy_id}"), "relevant", 1.0, [], "test",
+            )
+        dictionary_path = Path(self.temp_dir.name) / "review-skills.txt"
+        dictionary_path.write_text("воинский учет\n", encoding="utf-8")
+        rows = discover_skill_candidates(self.database, load_skill_dictionary(dictionary_path), min_document_frequency=2)
+        candidate = next(row for row in rows if row["candidate"] == "редкий навык")
+        self.assertEqual((candidate["area_coverage"], candidate["time_coverage"], candidate["query_family_coverage"]), (2, 2, 1))
+        self.database.store_skill_review_batch("review-1", "test", {"fixture": True}, rows)
+        review = Path(self.temp_dir.name) / "review.csv"
+        review.write_text("candidate,decision,canonical_skill,reviewer_reason\nредкий навык,reject,,not a skill\n", encoding="utf-8")
+        output = Path(self.temp_dir.name) / "review-v2.txt"
+        import_skill_candidates(review, dictionary_path, output, database=self.database, batch_id="review-1")
+        after = discover_skill_candidates(self.database, load_skill_dictionary(dictionary_path), min_document_frequency=2)
+        self.assertNotIn("редкий навык", {row["candidate"] for row in after})
 
     def test_skill_export_writes_normalized_latest_evidence(self):
         run_id = self.database.start_run({"fixture": "skill-export"})
@@ -845,6 +872,15 @@ class DatabaseTests(unittest.TestCase):
                 ("воинский учет", "title", "военный учет", 1),
             ],
         )
+
+        skills_path_v2 = Path(self.temp_dir.name) / "skills-v2.txt"
+        skills_path_v2.write_text("бронирование\n", encoding="utf-8")
+        run_offline_extraction(self.database, "skills", skill_dictionary=load_skill_dictionary(skills_path_v2))
+        with self.database.connect() as connection:
+            rebuilt = connection.execute(
+                "SELECT s.canonical_name, s.dictionary_version FROM vacancy_skills v JOIN skills s ON s.id = v.skill_id"
+            ).fetchall()
+        self.assertEqual({tuple(row) for row in rebuilt}, {("бронирование", load_skill_dictionary(skills_path_v2).version)})
 
     def test_extract_cli_defaults_to_latest_snapshot_without_transport(self):
         run_id = self.database.start_run({"fixture": "extract-cli"})

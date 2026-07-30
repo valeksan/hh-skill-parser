@@ -330,6 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_skills.add_argument("--output", required=True)
     discover_skills.add_argument("--skills-file", default="skills_whitelist.txt")
     discover_skills.add_argument("--min-document-frequency", type=nonnegative_int, default=2)
+    discover_skills.add_argument("--batch-id", help="persist immutable evidence batch before manual review")
 
     labeling_import = commands.add_parser("import", help="import SQLite data")
     labeling_import.add_argument("--config")
@@ -341,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
     candidates_import.add_argument("path")
     candidates_import.add_argument("--skills-file", required=True)
     candidates_import.add_argument("--output", required=True)
+    candidates_import.add_argument("--batch-id", help="persist decisions against prior discover batch")
 
     areas = commands.add_parser("areas", help="manage versioned HH area catalog")
     add_database_arguments(areas)
@@ -615,11 +617,18 @@ def run_discover(settings: argparse.Namespace) -> int:
     database.migrate()
     dictionary = load_skill_dictionary(settings.skills_file)
     rows = discover_skill_candidates(database, dictionary, min_document_frequency=settings.min_document_frequency)
+    if settings.batch_id:
+        database.store_skill_review_batch(settings.batch_id, dictionary.version, {
+            "min_document_frequency": settings.min_document_frequency,
+            "snapshot_scope": "latest",
+        }, rows)
     return export_skill_candidates(rows, settings.output)
 
 
 def run_import_skill_candidates(settings: argparse.Namespace) -> int:
-    return import_skill_candidates(settings.path, settings.skills_file, settings.output)
+    database = database_for(settings)
+    database.migrate()
+    return import_skill_candidates(settings.path, settings.skills_file, settings.output, database=database, batch_id=settings.batch_id)
 
 
 def run_import_labeling(settings: argparse.Namespace) -> int:

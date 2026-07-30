@@ -496,12 +496,58 @@ class Database:
     ) -> None:
         """Persist every deterministic skill-evidence source for one snapshot."""
         with self.transaction() as tx:
-            tx.execute("DELETE FROM vacancy_skills WHERE snapshot_id = ? AND extractor_version = ?", (snapshot_id, version))
+            # One dictionary version is authoritative for every rebuilt snapshot.
+            tx.execute("DELETE FROM vacancy_skills WHERE snapshot_id = ?", (snapshot_id,))
             for canonical, source, alias, count in matches:
                 tx.execute(
                     "INSERT INTO vacancy_skills(snapshot_id, skill_id, source, matched_alias, match_count, evidence_json, extractor_version) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (snapshot_id, skill_ids[canonical], source, alias, count, json_value([alias]), version),
+                )
+
+    def store_skill_review_batch(
+        self, batch_id: str, dictionary_version: str, config: dict[str, Any], rows: list[dict[str, Any]],
+    ) -> None:
+        """Freeze discovery evidence before manual decisions are made."""
+        with self.transaction() as tx:
+            existing = tx.execute("SELECT id FROM skill_review_batches WHERE batch_id = ?", (batch_id,)).fetchone()
+            if existing is not None:
+                raise ValueError(f"skill review batch already exists: {batch_id}")
+            review_id = int(tx.execute(
+                "INSERT INTO skill_review_batches(batch_id, dictionary_version, config_json, created_at) VALUES (?, ?, ?, ?)",
+                (batch_id, dictionary_version, json_value(config), utc_now()),
+            ).lastrowid)
+            tx.executemany(
+                "INSERT INTO skill_review_candidates(batch_id, candidate_normalized, evidence_hash, candidate_json) VALUES (?, ?, ?, ?)",
+                [(review_id, row["normalized"], row["evidence_hash"], json_value(row)) for row in rows],
+            )
+
+    def rejected_skill_candidates(self) -> set[tuple[str, str]]:
+        with self.connect() as connection:
+            return {(str(row["candidate_normalized"]), str(row["evidence_hash"])) for row in connection.execute(
+                "SELECT candidate_normalized, evidence_hash FROM skill_candidate_reviews WHERE decision = 'reject'"
+            )}
+
+    def record_skill_candidate_reviews(self, batch_id: str, rows: list[dict[str, str]]) -> None:
+        """Record immutable-batch decisions after CSV validation."""
+        with self.transaction() as tx:
+            batch = tx.execute("SELECT id FROM skill_review_batches WHERE batch_id = ?", (batch_id,)).fetchone()
+            if batch is None:
+                raise ValueError(f"unknown skill review batch: {batch_id}")
+            review_id = int(batch["id"])
+            frozen = {
+                str(row["candidate_normalized"]): str(row["evidence_hash"])
+                for row in tx.execute("SELECT candidate_normalized, evidence_hash FROM skill_review_candidates WHERE batch_id = ?", (review_id,))
+            }
+            for row in rows:
+                candidate = row["candidate"]
+                if candidate not in frozen:
+                    raise ValueError(f"candidate {candidate!r} is not in review batch {batch_id}")
+                tx.execute(
+                    "INSERT INTO skill_candidate_reviews(batch_id, candidate_normalized, evidence_hash, decision, canonical_skill, reviewer_reason, reviewed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(batch_id, candidate_normalized) DO NOTHING",
+                    (review_id, candidate, frozen[candidate], row["decision"], row.get("canonical_skill") or None,
+                     row.get("reviewer_reason") or None, utc_now()),
                 )
 
     def selected_snapshots(

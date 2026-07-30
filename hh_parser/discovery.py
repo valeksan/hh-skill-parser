@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -11,7 +13,7 @@ from typing import Any
 from .skill_dictionary import SkillDictionary, load_skill_dictionary
 from .storage import Database
 
-FIELDS = ("candidate", "normalized", "source", "document_count", "relevance_lift", "strata_coverage", "example_hh_ids", "example_titles", "evidence", "decision", "canonical_skill", "topic_family", "reviewer_reason")
+FIELDS = ("candidate", "normalized", "source", "document_count", "relevance_lift", "area_coverage", "time_coverage", "query_family_coverage", "strata_coverage", "marginal_gain", "example_hh_ids", "example_titles", "evidence", "evidence_hash", "decision", "canonical_skill", "topic_family", "reviewer_reason")
 STOPWORDS = frozenset("и в во на с по для от до за из к о об а но или не что как при под над без для опыт работа обязанности условия компания сотрудник специалист вакансия".split())
 TOKEN_RE = re.compile(r"[a-zа-я0-9]+(?:-[a-zа-я0-9]+)*", re.I)
 
@@ -31,6 +33,11 @@ def _ngrams(text: str) -> set[str]:
     return result
 
 
+def _evidence_hash(row: dict[str, Any]) -> str:
+    fields = ("normalized", "source", "document_count", "example_hh_ids", "evidence")
+    return hashlib.sha256(json.dumps({key: row[key] for key in fields}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def discover_skill_candidates(database: Database, dictionary: SkillDictionary, *, min_document_frequency: int = 2) -> list[dict[str, Any]]:
     """Rank unknown key-skill/n-gram candidates; reads only sanitized local data."""
     if min_document_frequency < 1:
@@ -39,7 +46,24 @@ def discover_skill_candidates(database: Database, dictionary: SkillDictionary, *
     with database.connect() as connection:
         labels = {int(row["snapshot_id"]): row["effective_label"] for row in connection.execute("SELECT snapshot_id, effective_label FROM effective_relevance_labels")}
     known = {normalize_candidate(alias) for alias in dictionary.aliases}
-    stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"docs": set(), "relevant": set(), "irrelevant": set(), "sources": set(), "examples": [], "strata": set()})
+    with database.connect() as connection:
+        excluded = known | {
+            normalize_candidate(value)
+            for row in connection.execute(
+                "SELECT employer_name, area_name, federal_district, federal_subject, locality FROM vacancy_snapshots"
+            ) for value in row if value
+        }
+        query_words = {
+            word for row in connection.execute("SELECT expression FROM search_queries")
+            for word in _ngrams(str(row["expression"]))
+        }
+        families: dict[str, set[str]] = defaultdict(set)
+        for row in connection.execute(
+            "SELECT h.vacancy_hh_id, q.query_group FROM vacancy_query_hits h JOIN search_queries q ON q.id = h.query_id"
+        ):
+            families[str(row["vacancy_hh_id"])].add(str(row["query_group"] or "ungrouped"))
+    rejected = database.rejected_skill_candidates()
+    stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"docs": set(), "relevant": set(), "irrelevant": set(), "sources": set(), "examples": [], "areas": set(), "times": set(), "families": set()})
     relevant_docs = irrelevant_docs = 0
     for snapshot in snapshots:
         snapshot_id = int(snapshot["id"])
@@ -52,7 +76,7 @@ def discover_skill_candidates(database: Database, dictionary: SkillDictionary, *
         candidates["key_skill"] = {normalize_candidate(str(item.get("name"))) for item in snapshot.get("key_skills", []) if isinstance(item, dict) and item.get("name")}
         for source, phrases in candidates.items():
             for phrase in phrases:
-                if not phrase or phrase in known or phrase in STOPWORDS:
+                if not phrase or phrase in excluded or phrase in query_words or phrase in STOPWORDS:
                     continue
                 item = stats[phrase]
                 item["docs"].add(snapshot_id)
@@ -61,7 +85,9 @@ def discover_skill_candidates(database: Database, dictionary: SkillDictionary, *
                     item["relevant"].add(snapshot_id)
                 elif label == "irrelevant":
                     item["irrelevant"].add(snapshot_id)
-                item["strata"].add((str(snapshot.get("area_id") or "unknown"), str(snapshot.get("published_at") or snapshot.get("observed_at") or "unknown")[:7]))
+                item["areas"].add(str(snapshot.get("area_id") or "unknown"))
+                item["times"].add(str(snapshot.get("published_at") or snapshot.get("observed_at") or "unknown")[:7])
+                item["families"].update(families.get(str(snapshot["vacancy_hh_id"]), {"unqueried"}))
                 if len(item["examples"]) < 3:
                     item["examples"].append((str(snapshot["vacancy_hh_id"]), str(snapshot.get("title") or ""), (snapshot.get("description_text") or "")[:180]))
     rows = []
@@ -71,14 +97,21 @@ def discover_skill_candidates(database: Database, dictionary: SkillDictionary, *
             continue
         lift = (len(item["relevant"]) / relevant_docs if relevant_docs else 0) - (len(item["irrelevant"]) / irrelevant_docs if irrelevant_docs else 0)
         examples = sorted(item["examples"])
-        rows.append({
+        area_coverage, time_coverage, family_coverage = len(item["areas"]), len(item["times"]), len(item["families"])
+        row = {
             "candidate": phrase, "normalized": phrase, "source": "|".join(sorted(item["sources"])),
             "document_count": count, "relevance_lift": round(lift, 6),
-            "strata_coverage": len(item["strata"]), "example_hh_ids": "|".join(value[0] for value in examples),
+            "area_coverage": area_coverage, "time_coverage": time_coverage, "query_family_coverage": family_coverage,
+            "strata_coverage": area_coverage * time_coverage * family_coverage,
+            "marginal_gain": round(max(lift, 0) * count * (1 + area_coverage + time_coverage + family_coverage), 6),
+            "example_hh_ids": "|".join(value[0] for value in examples),
             "example_titles": "|".join(value[1] for value in examples), "evidence": " | ".join(value[2] for value in examples),
             "decision": "", "canonical_skill": "", "topic_family": "", "reviewer_reason": "",
-        })
-    return sorted(rows, key=lambda row: (-row["relevance_lift"], -row["document_count"], row["candidate"]))
+        }
+        row["evidence_hash"] = _evidence_hash(row)
+        if (phrase, row["evidence_hash"]) not in rejected:
+            rows.append(row)
+    return sorted(rows, key=lambda row: (-row["marginal_gain"], -row["relevance_lift"], -row["document_count"], row["candidate"]))
 
 
 def export_skill_candidates(rows: list[dict[str, Any]], path: str | Path) -> int:
@@ -89,7 +122,7 @@ def export_skill_candidates(rows: list[dict[str, Any]], path: str | Path) -> int
     return len(rows)
 
 
-def import_skill_candidates(review_path: str | Path, dictionary_path: str | Path, output_path: str | Path) -> int:
+def import_skill_candidates(review_path: str | Path, dictionary_path: str | Path, output_path: str | Path, *, database: Database | None = None, batch_id: str | None = None) -> int:
     """Apply reviewed candidates into a new immutable dictionary file."""
     source = Path(dictionary_path)
     output = Path(output_path)
@@ -137,4 +170,12 @@ def import_skill_candidates(review_path: str | Path, dictionary_path: str | Path
     for canonical in sorted(grouped):
         lines.append(" | ".join([canonical, *sorted(alias for alias in grouped[canonical] if alias != canonical)]))
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if batch_id is not None:
+        if database is None:
+            raise ValueError("skill review batch requires database")
+        database.record_skill_candidate_reviews(batch_id, [
+            {"candidate": normalize_candidate(row.get("candidate") or ""), "decision": (row.get("decision") or "").strip().casefold(),
+             "canonical_skill": normalize_candidate(row.get("canonical_skill") or ""), "reviewer_reason": row.get("reviewer_reason") or ""}
+            for row in rows if (row.get("decision") or "").strip()
+        ])
     return applied

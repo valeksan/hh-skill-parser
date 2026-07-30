@@ -60,6 +60,8 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+hh_mobilization.sqlite3
+hh_mobilization.sqlite3-*
 
 # Flask stuff:
 instance/
@@ -209,6 +211,7 @@ __marimo__/
 
 # Generated files and build outputs
 progress.json
+config.toml
 *.png
 *.csv
-config.toml
+/local_docs/

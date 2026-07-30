@@ -52,7 +52,7 @@ git history.
      закрепить качество производных признаков golden-проверками.
 
 3. **P2 — готовность к регулярным запускам**
-   - [ ] [REL-1](da_mobilization_release_plan.md#rel-1):
+   - [x] [REL-1](da_mobilization_release_plan.md#rel-1):
      закрыть сквозные/golden сценарии.
    - [ ] [REL-2](da_mobilization_release_plan.md#rel-2):
      добавить backup/restore и контролируемый live smoke.

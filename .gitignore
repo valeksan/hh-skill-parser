@@ -215,4 +215,5 @@ config.toml
 *.png
 *.csv
 !docs/images/architecture.png
+.hh_oauth_token.json
 /local_docs/

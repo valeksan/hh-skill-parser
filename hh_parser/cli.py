@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, timedelta
+import getpass
 import hashlib
 import json
 import os
+import secrets
+import sys
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,6 +27,10 @@ from .extractors.offline import extract as run_extraction
 from .export import export_marts, export_query_hits, export_roles, export_skills, export_vacancies
 from .config import cli_defaults, load_config
 from .labeling import export_labeling, import_labeling
+from .oauth import (
+    authorization_url, pkce_pair, read_token_file, request_token, token_metadata,
+    wait_for_authorization_code, write_token_file,
+)
 from .pilot import create_pilot, export_pilot_labels, pilot_report
 from .query_specs import QuerySpec, load_query_specs
 from .skill_dictionary import load_skill_dictionary
@@ -157,6 +165,7 @@ def add_transport_arguments(parser: argparse.ArgumentParser, *, html_source: boo
     """Add API connection options shared by collect and resume."""
     parser.add_argument("--source", choices=["api", "html"] if html_source else ["api"], default="api")
     parser.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
+    parser.add_argument("--token-file", help="OAuth token JSON written by auth login; never printed")
     parser.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
     parser.add_argument("--host", default="hh.ru")
     parser.add_argument("--locale", default="RU")
@@ -347,9 +356,27 @@ def build_parser() -> argparse.ArgumentParser:
     live_smoke.add_argument("--area", default="1")
     live_smoke.add_argument("--request-timeout", type=float, default=5.0)
     live_smoke.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
+    live_smoke.add_argument("--token-file", help="OAuth token JSON written by auth login")
     live_smoke.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
     live_smoke.add_argument("--host", default="hh.ru")
     live_smoke.add_argument("--locale", default="RU")
+
+    auth = commands.add_parser("auth", help="obtain and refresh HH OAuth tokens locally")
+    auth_commands = auth.add_subparsers(dest="auth_command", required=True)
+    auth_login = auth_commands.add_parser("login", help="open browser OAuth login and save token file")
+    auth_login.add_argument("--client-id", required=True)
+    auth_login.add_argument("--client-secret", default=os.environ.get("HH_CLIENT_SECRET"))
+    auth_login.add_argument("--redirect-uri", default="http://127.0.0.1:8765/callback")
+    auth_login.add_argument("--token-file", default=".hh_oauth_token.json")
+    auth_login.add_argument("--callback-timeout", type=positive_int, default=300)
+    auth_login.add_argument("--no-browser", action="store_true", help="print authorization URL; keep callback server waiting")
+    auth_login.add_argument("--overwrite", action="store_true", help="replace existing token file")
+    auth_login.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
+    auth_refresh = auth_commands.add_parser("refresh", help="refresh token file after access token expiry")
+    auth_refresh.add_argument("--client-id", required=True)
+    auth_refresh.add_argument("--client-secret", default=os.environ.get("HH_CLIENT_SECRET"))
+    auth_refresh.add_argument("--token-file", default=".hh_oauth_token.json")
+    auth_refresh.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
 
     discover = commands.add_parser("discover", help="mine skill candidates from stored corpus")
     add_database_arguments(discover)
@@ -430,9 +457,15 @@ def resolve_collect_areas(settings: argparse.Namespace, database: Database) -> t
 
 def make_source(settings: argparse.Namespace) -> Any:
     """Create requested transport. Source choice is explicit; no fallback policy exists."""
+    access_token = getattr(settings, "access_token", None)
+    token_file = getattr(settings, "token_file", None)
+    if token_file:
+        if access_token:
+            raise ValueError("--access-token and --token-file cannot be combined")
+        access_token = read_token_file(token_file)["access_token"]
     options = dict(
         user_agent=settings.user_agent, timeout=settings.request_timeout,
-        access_token=getattr(settings, "access_token", None) or None,
+        access_token=access_token or None,
         host=settings.host, locale=settings.locale,
         max_retries=getattr(settings, "max_retries", 3),
         retry_backoff=getattr(settings, "retry_backoff", 1.0),
@@ -683,6 +716,62 @@ def run_live_smoke(
     return {"status": "completed", "partial": False, "items": len(items), "is_last_page": is_last_page}
 
 
+def oauth_client_secret(settings: argparse.Namespace) -> str:
+    """Read client secret without exposing it through arguments, files, or output."""
+    secret = settings.client_secret or getpass.getpass("HH OAuth client secret: ")
+    if not secret:
+        raise ValueError("HH OAuth client secret is required")
+    return secret
+
+
+def persisted_oauth_token(token: dict[str, Any]) -> dict[str, Any]:
+    """Keep only token fields needed for future API use/refresh."""
+    stored = {key: token[key] for key in ("access_token", "refresh_token", "expires_in", "token_type") if key in token}
+    stored["obtained_at"] = date.today().isoformat()
+    return stored
+
+
+def run_auth_login(
+    settings: argparse.Namespace, *, opener: Callable[[str], bool] = webbrowser.open,
+    callback_waiter: Callable[[str, str, int], str] = wait_for_authorization_code,
+    token_requester: Callable[..., dict[str, Any]] = request_token,
+) -> dict[str, Any]:
+    """Complete local OAuth authorization-code flow with PKCE and save no client secret."""
+    client_secret = oauth_client_secret(settings)
+    verifier, challenge = pkce_pair()
+    state = secrets.token_urlsafe(32)
+    url = authorization_url(
+        client_id=settings.client_id, redirect_uri=settings.redirect_uri, state=state, challenge=challenge,
+    )
+    print(json.dumps({"authorization_url": url}, ensure_ascii=False), file=sys.stderr, flush=True)
+    if not settings.no_browser:
+        opener(url)
+    code = callback_waiter(settings.redirect_uri, state, settings.callback_timeout)
+    token = token_requester({
+        "grant_type": "authorization_code", "client_id": settings.client_id,
+        "client_secret": client_secret, "redirect_uri": settings.redirect_uri,
+        "code": code, "code_verifier": verifier,
+    }, user_agent=settings.user_agent)
+    write_token_file(settings.token_file, persisted_oauth_token(token), overwrite=settings.overwrite)
+    return {"status": "completed", "token_file": str(settings.token_file), **token_metadata(token)}
+
+
+def run_auth_refresh(
+    settings: argparse.Namespace, *, token_requester: Callable[..., dict[str, Any]] = request_token,
+) -> dict[str, Any]:
+    """Refresh an existing token file in place without printing its secret values."""
+    current = read_token_file(settings.token_file)
+    refresh_token = current.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise ValueError("token file has no refresh_token; run auth login again")
+    token = token_requester({
+        "grant_type": "refresh_token", "client_id": settings.client_id,
+        "client_secret": oauth_client_secret(settings), "refresh_token": refresh_token,
+    }, user_agent=settings.user_agent)
+    write_token_file(settings.token_file, persisted_oauth_token(token), overwrite=True)
+    return {"status": "completed", "token_file": str(settings.token_file), **token_metadata(token)}
+
+
 def run_discover(settings: argparse.Namespace) -> int:
     database = database_for(settings)
     database.migrate()
@@ -824,6 +913,9 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(run_maintenance(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "db":
             print(json.dumps(run_db(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "auth":
+            result = run_auth_login(settings) if settings.auth_command == "login" else run_auth_refresh(settings)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif settings.command == "smoke":
             print(json.dumps(run_live_smoke(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "discover":

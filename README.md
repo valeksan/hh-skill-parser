@@ -206,6 +206,32 @@ hh-skill-parser collect --config config.toml --areas-file areas.txt
 сбором каталог должен быть сохранён через `areas sync`; collection фиксирует
 его version в run и `resume` не обновляет scope.
 
+## OAuth HH без ручных HTTP-запросов
+
+Зарегистрируйте приложение на `dev.hh.ru`, добавьте redirect URI
+`http://127.0.0.1:8765/callback` и получите `client_id`. Команда открывает
+браузер, ждёт callback на localhost, использует PKCE и сохраняет access/refresh
+tokens в файл с правами `0600`; token и client secret не печатаются. При запросе
+секрета введите `client_secret` приложения. Альтернатива — временно задать
+`HH_CLIENT_SECRET` в environment.
+
+```bash
+hh-skill-parser auth login --client-id YOUR_CLIENT_ID
+
+# Проверить один реальный запрос, не меняя SQLite.
+hh-skill-parser smoke live --confirm-live --token-file .hh_oauth_token.json
+
+# Использовать token file при collection/resume/retry.
+hh-skill-parser collect --token-file .hh_oauth_token.json --area 1 --date-from 2026-07-30
+
+# После истечения access token обновить file; refresh token не выводится.
+hh-skill-parser auth refresh --client-id YOUR_CLIENT_ID
+```
+
+По умолчанию token file — `.hh_oauth_token.json`; он ignored by git. Для другого
+пути передайте одинаковый `--token-file` всем этим командам. Не сочетайте его с
+`--access-token` или `HH_ACCESS_TOKEN`.
+
 ## Очистка raw payload
 
 Сканированные snapshots, hits, labels, features и exports команда не удаляет.

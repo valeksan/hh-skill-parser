@@ -7,14 +7,18 @@ from pathlib import Path
 
 from .storage import Database
 
-FIELDS = ("snapshot_id", "hh_id", "title", "description", "employer", "auto_label", "auto_score", "auto_reasons", "manual_label", "manual_reason")
+FIELDS = ("snapshot_id", "hh_id", "title", "description", "employer", "query_families", "auto_label", "auto_score", "auto_reasons", "manual_label", "manual_reason")
 
 
 def export_labeling(database: Database, path: str | Path) -> int:
     with database.connect() as connection:
         rows = connection.execute(
             "SELECT s.id snapshot_id, s.vacancy_hh_id hh_id, s.title, s.description_text description, "
-            "s.employer_name employer, l.label auto_label, l.score auto_score, l.reasons_json auto_reasons, "
+            "s.employer_name employer, COALESCE((SELECT group_concat(query_group, '|') FROM ("
+            "SELECT DISTINCT COALESCE(q.query_group, '') AS query_group "
+            "FROM vacancy_query_hits h JOIN search_queries q ON q.id=h.query_id "
+            "WHERE h.vacancy_hh_id=s.vacancy_hh_id ORDER BY query_group)), '') query_families, "
+            "l.label auto_label, l.score auto_score, l.reasons_json auto_reasons, "
             "l.manual_label, l.manual_reason FROM vacancy_snapshots s JOIN relevance_labels l ON l.snapshot_id=s.id "
             "ORDER BY s.id"
         ).fetchall()

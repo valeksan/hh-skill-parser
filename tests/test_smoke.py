@@ -20,7 +20,10 @@ from hh_parser.areas import (
     select_catalog_areas, validate_area_ids,
 )
 from hh_parser.collector import Collector, split_date_window
-from hh_parser.cli import apply_defaults, build_parser as build_research_parser, run_collect, run_resume
+from hh_parser.cli import (
+    apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
+    run_export_labeling, run_import_labeling,
+)
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.query_specs import load_query_specs
 from relevance import classify_relevance
@@ -774,6 +777,47 @@ class ApiSourceTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_labeling_cli_exports_and_imports_manual_review(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Database(Path(temp_dir) / "research.sqlite3")
+            database.migrate()
+            run_id = Collector(database).start({"fixture": "labeling"}, ["1"])
+            database.upsert_vacancy("123", source="api")
+            snapshot = normalize_api_vacancy({
+                "id": "123", "name": "Специалист", "description": "Воинский учет сотрудников",
+            })
+            database.record_snapshot(run_id, "123", snapshot)
+            database.upsert_auto_relevance(
+                database.snapshot_id("123", snapshot["content_hash"]), "relevant", 1.0,
+                ["signal:воинск"], "test",
+            )
+            export_path = Path(temp_dir) / "labels.csv"
+            parser = build_research_parser()
+            self.assertEqual(
+                run_export_labeling(parser.parse_args([
+                    "export", "--database", str(database.path), "labeling", "--output", str(export_path),
+                ])),
+                1,
+            )
+            with export_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertIn("query_families", rows[0])
+            rows[0]["manual_label"] = "relevant"
+            rows[0]["manual_reason"] = "reviewed"
+            with export_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+                writer.writeheader()
+                writer.writerows(rows)
+            self.assertEqual(
+                run_import_labeling(parser.parse_args([
+                    "import", "--database", str(database.path), "labeling", str(export_path),
+                ])),
+                1,
+            )
+            with database.connect() as connection:
+                label = connection.execute("SELECT manual_label, manual_reason FROM relevance_labels").fetchone()
+        self.assertEqual(tuple(label), ("relevant", "reviewed"))
+
     def test_toml_config_maps_to_cli_defaults_and_rejects_unknown_keys(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "config.toml"

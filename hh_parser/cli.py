@@ -15,6 +15,7 @@ import requests
 from .areas import AreaSelectionError, find_overlaps, load_area_file, select_catalog_areas, validate_area_ids
 from .collector import Collector
 from .config import cli_defaults, load_config
+from .labeling import export_labeling, import_labeling
 from .query_specs import load_query_specs
 from .sources.api import HHApiSource
 from .storage import Database
@@ -84,6 +85,20 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--queries-file", default="queries.txt")
     resume.add_argument("--max-pages", type=int, default=20)
     add_transport_arguments(resume)
+
+    export = commands.add_parser("export", help="export SQLite data")
+    export.add_argument("--config")
+    export.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    export_commands = export.add_subparsers(dest="export_command", required=True)
+    labeling_export = export_commands.add_parser("labeling", help="export relevance-labeling CSV")
+    labeling_export.add_argument("--output", required=True)
+
+    labeling_import = commands.add_parser("import", help="import SQLite data")
+    labeling_import.add_argument("--config")
+    labeling_import.add_argument("--database", default=os.environ.get("HH_DATABASE", DEFAULT_DATABASE))
+    import_commands = labeling_import.add_subparsers(dest="import_command", required=True)
+    labeling_import_csv = import_commands.add_parser("labeling", help="import reviewed relevance-labeling CSV")
+    labeling_import_csv.add_argument("path")
     return parser
 
 
@@ -199,6 +214,20 @@ def run_resume(
     )
 
 
+def run_export_labeling(settings: argparse.Namespace) -> int:
+    """Write all auto-labeled snapshots as reviewable CSV."""
+    database = Database(settings.database)
+    database.migrate()
+    return export_labeling(database, settings.output)
+
+
+def run_import_labeling(settings: argparse.Namespace) -> int:
+    """Apply reviewed labels from CSV without overwriting automatic labels."""
+    database = Database(settings.database)
+    database.migrate()
+    return import_labeling(database, settings.path)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run collect/resume command and print machine-readable result."""
     argv = argv if argv is not None else os.sys.argv[1:]
@@ -218,9 +247,13 @@ def main(argv: list[str] | None = None) -> None:
         if settings.command == "collect":
             run_id, counters = run_collect(settings)
             print(json.dumps({"run_id": run_id, **counters}, ensure_ascii=False, sort_keys=True))
-        else:
+        elif settings.command == "resume":
             counters = run_resume(settings)
             print(json.dumps({"run_id": settings.run_id, **counters}, ensure_ascii=False, sort_keys=True))
+        elif settings.command == "export":
+            print(json.dumps({"rows": run_export_labeling(settings)}, ensure_ascii=False, sort_keys=True))
+        else:
+            print(json.dumps({"rows": run_import_labeling(settings)}, ensure_ascii=False, sort_keys=True))
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:
         raise SystemExit(f"error: {error}") from error
 

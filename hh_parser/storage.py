@@ -480,6 +480,14 @@ class Database:
         connection: sqlite3.Connection, snapshot_id: int, snapshot: dict[str, Any],
     ) -> None:
         """Store analytical many-value links without discarding snapshot JSON."""
+        for work_format in snapshot.get("work_formats", []):
+            name = work_format.get("name") if isinstance(work_format, dict) else None
+            if name:
+                connection.execute(
+                    "INSERT INTO snapshot_work_formats(snapshot_id, work_format_id, work_format_name) VALUES (?, ?, ?) "
+                    "ON CONFLICT(snapshot_id, work_format_name) DO UPDATE SET work_format_id = excluded.work_format_id",
+                    (snapshot_id, work_format.get("id"), str(name)),
+                )
         for skill in snapshot.get("key_skills", []):
             name = skill.get("name") if isinstance(skill, dict) else None
             if name:

@@ -20,6 +20,7 @@ from hh_parser.areas import (
 )
 from hh_parser.collector import Collector, split_date_window
 from hh_parser.extractors.offline import extract as run_offline_extraction
+from hh_parser.extractors.features import extract_features
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_resume,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
@@ -319,13 +320,13 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row["version"] for row in migrations],
-            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql"],
+            ["0001_initial.sql", "0002_area_catalog.sql", "0003_resume_state.sql", "0004_snapshot_metadata.sql", "0005_snapshot_links.sql", "0006_error_windows.sql", "0007_relevance_labels.sql", "0008_effective_relevance_view.sql", "0009_features.sql", "0010_skills.sql", "0011_extraction_runs.sql", "0012_work_format_links.sql"],
         )
         self.assertTrue(
             {
                 "collection_runs", "search_queries", "search_pages",
                 "vacancies", "vacancy_query_hits", "vacancy_snapshots", "collection_errors",
-                "snapshot_key_skills", "snapshot_roles", "snapshot_industries",
+                "snapshot_key_skills", "snapshot_roles", "snapshot_industries", "snapshot_work_formats",
                 "features",
                 "skills", "skill_aliases", "vacancy_skills",
                 "extraction_runs", "extraction_errors",
@@ -432,6 +433,33 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(features["salary.midpoint"]["value_number"], 110000)
         self.assertEqual(features["work.remote"]["value_number"], 1)
         self.assertIn("бронирован", features["topic.reservation"]["value_json"])
+
+    def test_features_extract_security_and_publication_signals(self):
+        features = {
+            item["name"]: item
+            for item in extract_features({
+                "title": "Специалист",
+                "description_text": (
+                    "Требуется допуск к государственной тайне, военный билет, "
+                    "работа в военное время. Участие в учениях по ГО. "
+                    "Взаимодействие с военкоматом."
+                ),
+                "published_at": "2026-07-01T12:00:00+03:00",
+                "observed_at": "2026-07-04T12:00:00+03:00",
+                "salary_from": 100000,
+                "salary_to": 120000,
+                "salary_currency": "RUB",
+                "salary_frequency": "MONTH",
+                "work_formats": [],
+            })
+        }
+        for signal in ("security_clearance", "military_id", "wartime", "exercise", "government_interaction"):
+            self.assertEqual(features[f"signal.{signal}"]["value_number"], 1)
+            self.assertTrue(features[f"signal.{signal}.evidence"]["value_json"])
+        self.assertEqual(features["publication.day"]["value_text"], "2026-07-01")
+        self.assertEqual(features["publication.week"]["value_text"], "2026-W27")
+        self.assertEqual(features["publication.age_days"]["value_number"], 3)
+        self.assertEqual(features["salary.monthly_rub"]["value_number"], 110000)
 
     def test_offline_skill_extraction_stores_versioned_evidence(self):
         skills_path = Path(self.temp_dir.name) / "skills.txt"
@@ -572,6 +600,24 @@ class DatabaseTests(unittest.TestCase):
                 "SELECT auto_label, effective_label, effective_reason FROM effective_relevance_labels"
             ).fetchone()
         self.assertEqual(tuple(row), ("borderline", "relevant", "reviewed"))
+
+    def test_relevance_reextract_keeps_manual_label(self):
+        run_id = self.database.start_run({"fixture": "manual-reextract"})
+        self.database.upsert_vacancy("123", source="api")
+        self.database.record_snapshot(run_id, "123", {
+            "content_hash": "manual-reextract-hash", "title": "Специалист",
+            "description_text": "Воинский учет", "source": "api",
+        })
+        snapshot_id = self.database.snapshot_id("123", "manual-reextract-hash")
+        self.database.upsert_auto_relevance(snapshot_id, "relevant", 1.0, ["old"], "old")
+        self.database.set_manual_relevance(snapshot_id, "irrelevant", "reviewed")
+        run_offline_extraction(self.database, "relevance")
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT label, manual_label, manual_reason FROM relevance_labels WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        self.assertEqual(tuple(row), ("relevant", "irrelevant", "reviewed"))
 
     def test_collect_and_resume_cli_use_frozen_catalog_scope(self):
         self.database.store_area_catalog(
@@ -756,17 +802,22 @@ class NormalizationTests(unittest.TestCase):
             database.upsert_vacancy("1", source="api")
             snapshot = normalize_api_vacancy({
                 "id": "1", "name": "Специалист",
+                "work_format": [{"id": "REMOTE", "name": "Удалённо"}],
                 "key_skills": [{"name": "Воинский учет"}],
                 "professional_roles": [{"id": "1", "name": "Специалист"}],
                 "industries": [{"id": "7.540", "name": "Оборонная промышленность"}],
             })
             database.record_snapshot(run_id, "1", snapshot)
             with database.connect() as connection:
+                work_format = connection.execute(
+                    "SELECT work_format_id, work_format_name FROM snapshot_work_formats"
+                ).fetchone()
                 skill = connection.execute("SELECT skill_name FROM snapshot_key_skills").fetchone()[0]
                 role = connection.execute("SELECT role_id, role_name FROM snapshot_roles").fetchone()
                 industry = connection.execute(
                     "SELECT industry_id, industry_name FROM snapshot_industries"
                 ).fetchone()
+        self.assertEqual(tuple(work_format), ("REMOTE", "Удалённо"))
         self.assertEqual(skill, "Воинский учет")
         self.assertEqual(tuple(role), ("1", "Специалист"))
         self.assertEqual(tuple(industry), ("7.540", "Оборонная промышленность"))

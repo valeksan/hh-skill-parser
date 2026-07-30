@@ -35,7 +35,7 @@ from hh_parser.labeling import stratified_sample
 from hh_parser.pilot import create_pilot, pilot_report
 from hh_parser.query_specs import QuerySpec, load_query_specs
 from hh_parser.skill_dictionary import load_skill_dictionary
-from relevance import classify_relevance
+from hh_parser.relevance import classify_relevance
 from hh_parser.sources.api import HHApiSource
 
 

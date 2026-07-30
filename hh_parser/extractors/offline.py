@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from relevance import VERSION as RELEVANCE_VERSION, classify_relevance
+from ..relevance import VERSION as RELEVANCE_VERSION, classify_relevance
 
 from ..skill_dictionary import SkillDictionary, topic_family
 from ..storage import Database

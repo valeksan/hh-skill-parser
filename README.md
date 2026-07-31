@@ -49,6 +49,9 @@ hh-skill-parser collect --areas-file areas.txt
 # Каталог областей предварительно синхронизируется через API.
 hh-skill-parser collect --source html --area 1 --date-from 2026-01-01
 
+# Source payloads are not retained by default. Enable only for debugging.
+hh-skill-parser collect --source html --store-raw --area 1 --date-from 2026-01-01
+
 # Продолжение того же запуска после сбоя.
 hh-skill-parser resume --run-id RUN_ID
 

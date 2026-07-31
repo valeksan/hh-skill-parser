@@ -117,7 +117,7 @@ def normalize_iso_timestamp(value: Any) -> tuple[str | None, str | None]:
 
 def _snapshot(
     data: dict[str, Any], *, source: str, raw_payload: Any, observed_at: str | None = None,
-    geography: dict[str, str | None] | None = None,
+    geography: dict[str, str | None] | None = None, store_raw: bool = True,
 ) -> dict[str, Any]:
     redacted_payload, redaction_types = redact_payload(raw_payload)
     description_html, html_types = sanitize_text(data.get("description", ""))
@@ -125,6 +125,12 @@ def _snapshot(
     redaction_types = sorted(set(redaction_types + html_types + text_types))
 
     employer = data.get("employer") or {}
+    employer_type = employer.get("type")
+    employer_id = employer.get("id")
+    employer_name = employer.get("name")
+    if employer_type == "individual":
+        employer_id, employer_name = None, None
+        redaction_types = sorted(set(redaction_types + ["individual_employer"]))
     area = data.get("area") or {}
     geography = geography or {}
     salary = data.get("salary_range") or data.get("salary") or {}
@@ -148,12 +154,12 @@ def _snapshot(
         "title": data.get("name") or "", "description_html": description_html,
         "published_at": published_at, "created_at": created_at,
         "expires_at": expires_at, "archived": data.get("archived"),
-        "employer_id": employer.get("id"), "employer_name": employer.get("name"),
+        "employer_id": employer_id, "employer_name": employer_name,
         "geography": geography,
         "raw": redacted_payload,
     }
     content_hash = hashlib.sha256(json_value(fingerprint).encode("utf-8")).hexdigest()
-    compressed, raw_hash = _compressed_json(redacted_payload)
+    compressed, raw_hash = _compressed_json(redacted_payload) if store_raw else (None, None)
     return {
         "observed_at": observed_at or utc_now(), "content_hash": content_hash,
         "title": data.get("name") or "", "description_html": description_html,
@@ -161,14 +167,14 @@ def _snapshot(
         "published_at_source_offset": published_offset, "created_at": created_at,
         "created_at_source_offset": created_offset, "expires_at": expires_at,
         "expires_at_source_offset": expires_offset,
-        "archived": data.get("archived"), "employer_id": employer.get("id"),
-        "employer_name": employer.get("name"), "area_id": area.get("id"),
+        "archived": data.get("archived"), "employer_id": employer_id,
+        "employer_name": employer_name, "area_id": area.get("id"),
         "area_name": area.get("name"), "federal_district": geography.get("federal_district"),
         "federal_subject": geography.get("federal_subject"), "locality": geography.get("locality"),
         "salary_from": salary.get("from"),
         "salary_to": salary.get("to"), "salary_currency": salary.get("currency"),
         "salary_gross": salary.get("gross"), "salary_frequency": frequency, "source": source,
-        "employer_type": employer.get("type"), "employer_trusted": employer.get("trusted"),
+        "employer_type": employer_type, "employer_trusted": employer.get("trusted"),
         "employer_accredited_it": employer.get("accredited_it_employer"),
         "experience_id": _id(data.get("experience")), "employment_id": _id(data.get("employment")),
         "schedule_id": _id(data.get("schedule")), "work_formats": _public_list(work_format),
@@ -192,9 +198,9 @@ def _snapshot(
                     created_at, source,
                     empty_reason="invalid_or_missing_source_timestamp" if data.get("created_at") else "not_provided_by_source",
                 ),
-                "employer": _field_status(employer.get("id") or employer.get("name"), source),
-                "employer_id": _field_status(employer.get("id"), source),
-                "employer_name": _field_status(employer.get("name"), source),
+                "employer": _field_status(employer_id or employer_name, source),
+                "employer_id": _field_status(employer_id, source),
+                "employer_name": _field_status(employer_name, source),
                 "geography": _field_status(area.get("id") or area.get("name"), source),
                 "area_id": _field_status(area.get("id"), source),
                 "area_name": _field_status(area.get("name"), source),
@@ -215,8 +221,9 @@ def _snapshot(
                 "key_skills": _field_status(key_skills, source),
             },
         },
-        "raw_payload": compressed, "raw_content_type": "application/json",
-        "raw_compression": "gzip", "raw_size": len(compressed), "raw_hash": raw_hash,
+        "raw_payload": compressed, "raw_content_type": "application/json" if store_raw else None,
+        "raw_compression": "gzip" if store_raw else None,
+        "raw_size": len(compressed) if compressed is not None else None, "raw_hash": raw_hash,
         "redaction_applied": bool(redaction_types), "redaction_version": REDACTION_VERSION,
         "redaction_types": redaction_types,
     }
@@ -224,18 +231,26 @@ def _snapshot(
 
 def normalize_api_vacancy(
     data: dict[str, Any], *, observed_at: str | None = None,
-    geography: dict[str, str | None] | None = None,
+    geography: dict[str, str | None] | None = None, store_raw: bool = True,
 ) -> dict[str, Any]:
     """Normalize one API detail response into storage snapshot fields."""
-    return _snapshot(data, source="api", raw_payload=data, observed_at=observed_at, geography=geography)
+    return _snapshot(
+        data, source="api", raw_payload=data, observed_at=observed_at,
+        geography=geography, store_raw=store_raw,
+    )
 
 
 def normalize_html_vacancy(
-    data: dict[str, Any], html_text: str, *, observed_at: str | None = None
+    data: dict[str, Any], html_text: str, *, observed_at: str | None = None, store_raw: bool = True,
 ) -> dict[str, Any]:
     """Normalize parsed HTML card and store only redacted compressed HTML payload."""
     sanitized_html, redaction_types = sanitize_text(html_text)
-    snapshot = _snapshot(data, source="html", raw_payload={"html": sanitized_html}, observed_at=observed_at)
+    snapshot = _snapshot(
+        data, source="html", raw_payload={"html": sanitized_html}, observed_at=observed_at,
+        store_raw=store_raw,
+    )
+    if not store_raw:
+        return snapshot
     raw_bytes = sanitized_html.encode("utf-8")
     snapshot["raw_payload"] = gzip.compress(raw_bytes)
     snapshot["raw_content_type"] = "text/html"

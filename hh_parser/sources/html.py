@@ -123,7 +123,9 @@ class HHHtmlSource:
         title = cls._text(soup, '[data-qa="vacancy-title"]') or job.get("title")
         description = cls._html(soup, '[data-qa="vacancy-description"]') or job.get("description")
         employer_name = cls._text(soup, '[data-qa="vacancy-company__details"]') or cls._name(job.get("hiringOrganization"))
-        area_name = cls._text(soup, '[data-qa="vacancy-view-raw-address"]') or cls._name(job.get("jobLocation"))
+        # The HTML address block can contain a street and building number; retain
+        # only the structured locality and omit it when that is unavailable.
+        area_name = cls._name(job.get("jobLocation"))
         salary = cls._salary(job.get("baseSalary"))
         archived = cls._archived(soup)
         result: dict[str, Any] = {

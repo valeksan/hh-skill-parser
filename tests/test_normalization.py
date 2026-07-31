@@ -106,6 +106,26 @@ class NormalizationTests(unittest.TestCase):
         )
         self.assertTrue(snapshot["redaction_applied"])
 
+    def test_normalization_can_omit_raw_payload_from_storage(self):
+        snapshot = normalize_api_vacancy({
+            "id": "1", "name": "Специалист", "description": "mail@example.com",
+        }, store_raw=False)
+
+        self.assertIsNone(snapshot["raw_payload"])
+        self.assertIsNone(snapshot["raw_content_type"])
+        self.assertIsNone(snapshot["raw_hash"])
+        self.assertIn("[redacted-email]", snapshot["description_text"])
+
+    def test_normalization_does_not_store_identifiers_of_individual_employer(self):
+        snapshot = normalize_api_vacancy({
+            "id": "1", "name": "Специалист",
+            "employer": {"id": "private-42", "name": "Иванов Иван Иванович", "type": "individual"},
+        }, store_raw=False)
+
+        self.assertIsNone(snapshot["employer_id"])
+        self.assertIsNone(snapshot["employer_name"])
+        self.assertIn("individual_employer", snapshot["redaction_types"])
+
     def test_redaction_is_recursive_and_raw_hash_uses_only_redacted_payload(self):
         payload = {
             "id": "nested", "name": "Специалист", "description": "location: Secret street 1",

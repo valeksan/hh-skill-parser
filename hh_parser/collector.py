@@ -15,12 +15,16 @@ from .storage import Database
 class Collector:
     """Collect candidates before relevance decisions; persist every stage."""
 
-    def __init__(self, database: Database, *, transport: Any | None = None, write_batch_size: int = 1):
+    def __init__(
+        self, database: Database, *, transport: Any | None = None, write_batch_size: int = 1,
+        store_raw: bool = True,
+    ):
         self.database = database
         self.transport = transport
         if write_batch_size < 1:
             raise ValueError("write_batch_size must be positive")
         self.write_batch_size = write_batch_size
+        self.store_raw = store_raw
         self.loaded_ids: set[str] = set()
         self._catalog_by_run: dict[int, dict[str, Any] | None] = {}
 
@@ -488,9 +492,9 @@ class Collector:
             html = payload.get("_html")
             if not isinstance(html, str):
                 raise ValueError("HTML source returned no raw HTML")
-            return normalize_html_vacancy(payload, html)
+            return normalize_html_vacancy(payload, html, store_raw=self.store_raw)
         geography = resolve_russia_geography((payload.get("area") or {}).get("id"), catalog) if catalog else None
-        return normalize_api_vacancy(payload, geography=geography)
+        return normalize_api_vacancy(payload, geography=geography, store_raw=self.store_raw)
 
     def _stored_page_is_last(
         self, run_id: int, query_id: int, area_id: int, page: int,

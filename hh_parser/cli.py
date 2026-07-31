@@ -245,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_database_arguments(coverage)
     coverage.add_argument("--run-id", required=True, type=int)
 
+    runs = commands.add_parser("runs", help="list persisted collection runs; no network")
+    runs.add_argument("--config")
+    add_database_arguments(runs)
+    runs.add_argument("--status", choices=["running", "completed", "degraded", "failed", "cancelled"])
+    runs.add_argument("--limit", type=positive_int, default=20)
+
     extract = commands.add_parser("extract", help="derive offline data from stored snapshots")
     extract.add_argument("--config")
     add_database_arguments(extract)
@@ -581,6 +587,14 @@ def run_coverage(settings: argparse.Namespace) -> list[dict[str, Any]]:
     return database.coverage_report(settings.run_id)
 
 
+def run_runs(settings: argparse.Namespace) -> list[dict[str, Any]]:
+    """List recent collection runs from SQLite without making network requests."""
+    database = database_for(settings)
+    database.migrate()
+    database.require_compatible_schema()
+    return database.list_runs(status=settings.status, limit=settings.limit)
+
+
 def run_export_labeling(settings: argparse.Namespace) -> int:
     """Write all auto-labeled snapshots as reviewable CSV."""
     database = database_for(settings)
@@ -883,6 +897,8 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps({"run_id": settings.run_id, **run_retry(settings)}, ensure_ascii=False, sort_keys=True))
         elif settings.command == "coverage":
             print(json.dumps(run_coverage(settings), ensure_ascii=False, sort_keys=True))
+        elif settings.command == "runs":
+            print(json.dumps(run_runs(settings), ensure_ascii=False, sort_keys=True))
         elif settings.command == "export":
             if settings.export_command == "labeling":
                 rows = run_export_labeling(settings)

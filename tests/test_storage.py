@@ -28,7 +28,7 @@ from hh_parser.stats import vacancy_stats
 from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_coverage, run_resume, run_retry, resolve_collection_window,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
-    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats, run_live_smoke,
+    run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_runs, run_stats, run_live_smoke,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -293,6 +293,23 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.database.run_counters(self.database.start_run({"fixture": "fresh"})), {
             "found": 0, "unique": 0, "loaded": 0, "errors": 0,
         })
+
+    def test_runs_cli_lists_recent_runs_and_filters_status(self):
+        completed = self.database.start_run({"effective_date_from": "2026-01-01", "effective_date_to": "2026-01-31"}, source_policy="html")
+        self.database.finish_run(completed, "completed")
+        running = self.database.start_run({}, source_policy="api")
+        parser = build_research_parser()
+
+        rows = run_runs(parser.parse_args(["runs", "--database", str(self.database.path)]))
+        self.assertEqual([row["run_id"] for row in rows], [running, completed])
+        self.assertEqual(rows[0]["status"], "running")
+        self.assertEqual(rows[1]["source"], "html")
+        self.assertEqual(rows[1]["date_from"], "2026-01-01")
+
+        filtered = run_runs(parser.parse_args([
+            "runs", "--database", str(self.database.path), "--status", "running",
+        ]))
+        self.assertEqual([row["run_id"] for row in filtered], [running])
 
     def test_db_check_reports_healthy_sqlite(self):
         settings = build_research_parser().parse_args(["db", "--database", str(self.database.path), "check"])

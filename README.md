@@ -108,6 +108,12 @@ hh-skill-parser retry --run-id 42 --max-attempts 3
 hh-skill-parser coverage --run-id 42
 ```
 
+To find an interrupted run ID without opening SQLite directly:
+
+```bash
+hh-skill-parser runs --status running
+```
+
 `coverage` читает сохранённые единицы поиска и загрузки карточек, сеть не
 вызывает. `completed` означает обработанные единицы, не полноту всех результатов
 HH: API pagination ограничена `--max-pages`, насыщенные интервалы режутся до

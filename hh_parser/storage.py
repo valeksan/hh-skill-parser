@@ -102,13 +102,16 @@ class Database:
         """Fail clearly when DB is not exactly compatible with packaged schema."""
         if not self.path.exists():
             raise ValueError(f"database schema is unavailable: {self.path}; run 'hh-skill-parser db migrate'")
-        with sqlite3.connect(self.path) as connection:
+        connection = sqlite3.connect(self.path)
+        try:
             table = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
             ).fetchone()
             if table is None:
                 raise ValueError("database schema is incompatible: schema_migrations is missing; run 'hh-skill-parser db migrate'")
             applied = {str(row[0]) for row in connection.execute("SELECT version FROM schema_migrations")}
+        finally:
+            connection.close()
         expected = set(self._migration_names())
         missing, unknown = sorted(expected - applied), sorted(applied - expected)
         if missing or unknown:
@@ -1017,6 +1020,46 @@ class Database:
                 (run_id,),
             ).fetchone()[0]
         return {"found": found, "unique": unique, "loaded": loaded, "errors": errors}
+
+    def list_runs(self, *, status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Return concise, durable metadata for recent collection runs."""
+        if limit < 1:
+            raise ValueError("run list limit must be positive")
+        statuses = {"running", "completed", "degraded", "failed", "cancelled"}
+        if status is not None and status not in statuses:
+            raise ValueError(f"unknown run status: {status}")
+        clauses, values = [], []
+        if status is not None:
+            clauses.append("r.status = ?")
+            values.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT r.id AS run_id, r.status, r.started_at, r.finished_at, r.source_policy, r.collection_mode, "
+            "r.config_json, "
+            "(SELECT COUNT(*) FROM vacancy_query_hits h WHERE h.run_id = r.id) AS found, "
+            "(SELECT COUNT(DISTINCT h.vacancy_hh_id) FROM vacancy_query_hits h WHERE h.run_id = r.id) AS unique_count, "
+            "(SELECT COUNT(DISTINCT o.vacancy_hh_id) FROM vacancy_snapshot_observations o WHERE o.run_id = r.id) AS loaded, "
+            "(SELECT COUNT(*) FROM collection_errors e WHERE e.run_id = r.id AND e.resolved_at IS NULL) AS errors "
+            f"FROM collection_runs r {where} ORDER BY r.id DESC LIMIT ?"
+        )
+        connection = self.connect()
+        try:
+            rows = connection.execute(sql, (*values, limit)).fetchall()
+        finally:
+            connection.close()
+        result = []
+        for row in rows:
+            config = json.loads(row["config_json"])
+            result.append({
+                "run_id": int(row["run_id"]), "status": row["status"],
+                "started_at": row["started_at"], "finished_at": row["finished_at"],
+                "source": row["source_policy"], "collection_mode": row["collection_mode"],
+                "date_from": config.get("effective_date_from", config.get("date_from")),
+                "date_to": config.get("effective_date_to", config.get("date_to")),
+                "found": int(row["found"]), "unique": int(row["unique_count"]),
+                "loaded": int(row["loaded"]), "errors": int(row["errors"]),
+            })
+        return result
 
     def run_config(self, run_id: int) -> dict[str, Any]:
         """Load immutable, redacted run configuration for safe resume."""

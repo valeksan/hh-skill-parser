@@ -29,6 +29,7 @@ from hh_parser.cli import (
     apply_defaults, build_parser as build_research_parser, run_collect, run_coverage, run_resume, run_retry, resolve_collection_window,
     run_areas_list, run_areas_sync, run_areas_validate, run_export_labeling,
     run_db, run_discover, run_import_labeling, run_import_skill_candidates, run_extract, run_export_skills, run_export_vacancies, run_maintenance, run_stats,
+    configure_file_logger,
 )
 from hh_parser.config import cli_defaults, load_config
 from hh_parser.labeling import stratified_sample
@@ -40,6 +41,28 @@ from hh_parser.sources.api import HHApiSource
 
 
 class ConfigTests(unittest.TestCase):
+    def test_file_logger_writes_next_to_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "research.sqlite3"
+            logger, log_path = configure_file_logger(database_path)
+            try:
+                logger.info("test event")
+                database = Database(database_path)
+                database.migrate()
+                run_id = database.start_run({"fixture": "file-log"})
+                database.upsert_vacancy("123", source="api")
+                database.record_error(run_id, "vacancy", "Timeout", "temporary", vacancy_hh_id="123")
+                for handler in logger.handlers:
+                    handler.flush()
+                log_contents = log_path.read_text(encoding="utf-8")
+                self.assertEqual(log_path.parent, Path(temp_dir) / "logs")
+                self.assertIn("INFO test event", log_contents)
+                self.assertIn("WARNING collection_error", log_contents)
+            finally:
+                for handler in logger.handlers[:]:
+                    logger.removeHandler(handler)
+                    handler.close()
+
     def test_labeling_sample_is_deterministic_and_stratified(self):
         rows = [
             {"snapshot_id": 1, "query_families": "military", "_area_id": 1, "_period": "2026-01-01", "auto_label": "relevant"},

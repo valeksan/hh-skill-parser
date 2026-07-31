@@ -5,11 +5,16 @@ from __future__ import annotations
 import hashlib
 import gzip
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+
+LOGGER = logging.getLogger(__name__)
+LOGGER.addHandler(logging.NullHandler())
 
 
 def utc_now() -> str:
@@ -851,6 +856,10 @@ class Database:
             "http_status, message, attempt, occurred_at, date_from, date_to, source, reason_code) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             values, connection,
+        )
+        LOGGER.warning(
+            "collection_error run_id=%s stage=%s vacancy_hh_id=%s type=%s http_status=%s attempt=%s message=%s",
+            run_id, stage, vacancy_hh_id, error_type, http_status, attempt, message,
         )
 
     @staticmethod

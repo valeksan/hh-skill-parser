@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timezone, timedelta
 import getpass
 import hashlib
 import json
+import logging
 import os
 import secrets
 import sys
@@ -41,6 +42,25 @@ from .storage import Database
 
 DEFAULT_DATABASE = "hh_mobilization.sqlite3"
 DEFAULT_USER_AGENT = "hh-skill-parser/1.0 (contact@example.invalid)"
+
+
+def configure_file_logger(database_path: str | Path) -> tuple[logging.Logger, Path]:
+    """Write one append-only operational log next to the selected SQLite database."""
+    log_directory = Path(database_path).parent / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
+    log_path = log_directory / f"hh-skill-parser-{datetime.now(timezone.utc):%Y-%m-%d}.log"
+    logger = logging.getLogger("hh_parser")
+    logger.setLevel(logging.INFO)
+    for previous_handler in logger.handlers[:]:
+        logger.removeHandler(previous_handler)
+        previous_handler.close()
+    logger.propagate = False
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)sZ %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    logger.addHandler(handler)
+    return logger, log_path
 
 
 def parse_iso_date(value: str) -> str:
@@ -910,6 +930,9 @@ def main(argv: list[str] | None = None) -> None:
     }
     apply_defaults(parser, {key: value for key, value in environment.items() if value is not None})
     settings = parser.parse_args(argv)
+    logger, log_path = configure_file_logger(settings.database)
+    print(f"log: {log_path}", file=sys.stderr, flush=True)
+    logger.info("started command=%s database=%s", settings.command, settings.database)
     try:
         if settings.command == "collect":
             run_id, counters = run_collect(settings)
@@ -932,6 +955,7 @@ def main(argv: list[str] | None = None) -> None:
                 rows = run_export_skills(settings)
             elif settings.export_command == "marts":
                 print(json.dumps(run_export_marts(settings), ensure_ascii=False, sort_keys=True))
+                logger.info("completed command=%s", settings.command)
                 return
             else:
                 rows = run_export_relation(settings)
@@ -966,7 +990,13 @@ def main(argv: list[str] | None = None) -> None:
         else:
             raise SystemExit("error: unsupported command")
     except (AreaSelectionError, OSError, ValueError, requests.RequestException) as error:
+        logger.exception("failed command=%s: %s", settings.command, error)
         raise SystemExit(f"error: {error}") from error
+    except Exception:
+        logger.exception("unexpected failure command=%s", settings.command)
+        raise
+    else:
+        logger.info("completed command=%s", settings.command)
 
 
 if __name__ == "__main__":

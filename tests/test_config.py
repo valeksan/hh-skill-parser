@@ -218,6 +218,16 @@ class ConfigTests(unittest.TestCase):
 
     def test_relevance_is_explainable_and_keeps_uncertain_candidates(self):
         self.assertEqual(classify_relevance("Специалист", "Воинский учет сотрудников")[0], "relevant")
+        label, score, reasons = classify_relevance(
+            "Python-разработчик", "Аккредитованная IT-компания. Предоставляем отсрочку от мобилизации.",
+        )
+        self.assertEqual(label, "irrelevant")
+        self.assertEqual(score, 0.0)
+        self.assertTrue(reasons[0].startswith("exclude:benefit:"))
+        self.assertEqual(
+            classify_relevance("Специалист по воинскому учету", "Есть отсрочка от мобилизации")[0],
+            "relevant",
+        )
         label, score, reasons = classify_relevance("Специалист", "Документооборот")
         self.assertEqual((label, score, reasons), ("borderline", 0.0, []))
 

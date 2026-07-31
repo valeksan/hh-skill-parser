@@ -96,6 +96,9 @@ history и не меняет incremental watermark.
 `export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
+Автоматическая relevance-разметка не считает релевантной вакансию только из-за
+льготы работодателя «отсрочка/бронь от мобилизации»; при наличии признаков
+реальной работы с воинским учётом и смежными темами она остаётся релевантной.
 `pilot create` фиксирует выбранные snapshot IDs, filters и query specs в SQLite;
 `pilot report` пересчитывает union precision/recall-in-pilot, overlap и marginal gain
 только по сохранённому batch и manual labels. `unknown`/blank не входят в binary metrics.

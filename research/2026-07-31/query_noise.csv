@@ -1,0 +1,12 @@
+query_group,query_id,expression,hit_vacancies,relevant_vacancies,irrelevant_vacancies
+strong_markers,1,мобилизац*,334,346,0
+stable_phrases,5,"""воинский учет""",243,243,0
+contextual_ambiguity,9,бронирован* AND (военнообязан* OR воинск* OR запас*),163,163,0
+controlled,11,"""ГО и ЧС""",138,138,0
+stable_phrases,6,"""гражданская оборона""",135,135,0
+stable_phrases,7,"""секретное делопроизводство""",107,107,0
+strong_markers,4,гостайн*,95,95,0
+strong_markers,2,военно-учетн*,55,55,0
+controlled,12,"""защита государственной тайны""",34,106,0
+strong_markers,3,режимно-секретн*,29,29,0
+controlled,10,"""первый отдел""",18,18,0

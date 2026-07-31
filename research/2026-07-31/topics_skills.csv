@@ -1,0 +1,14 @@
+topic_family,skill,effective_label,vacancy_count
+military_registration,воинский учет,relevant,294
+military_registration,"бронирование граждан, пребывающих в запасе",relevant,56
+military_registration,взаимодействие с военным комиссариатом,relevant,40
+military_registration,специальный воинский учет,relevant,21
+civil_defense,гражданская оборона,relevant,11
+mobilization,мобилизационная подготовка,relevant,8
+mobilization,мобилизационное планирование,relevant,8
+military_registration,сверка данных воинского учета,relevant,6
+civil_defense,защита от чрезвычайных ситуаций,relevant,5
+mobilization,мобилизационная работа,relevant,3
+mobilization,мобилизационное задание,relevant,1
+mobilization,мобилизационные учения и тренировки,relevant,1
+military_registration,отчетность по воинскому учету,relevant,1

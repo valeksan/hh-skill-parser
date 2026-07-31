@@ -212,8 +212,29 @@ __marimo__/
 # Generated files and build outputs
 progress.json
 config.toml
+logs/
+marts-relevant/
+/plot_top_skills.py
+/plot_publications_timeline.py
 *.png
 *.csv
 !docs/images/architecture.png
 .hh_oauth_token.json
 /local_docs/
+
+# The dated research snapshot is curated, aggregate-only DA material.  Raw
+# vacancy exports, SQLite files, source payloads, addresses and contacts stay
+# ignored even when generated alongside these artifacts.
+!research/2026-07-31/
+!research/2026-07-31/README.md
+!research/2026-07-31/publication_trends.csv
+!research/2026-07-31/publication_trends_novosibirsk.csv
+!research/2026-07-31/top_skills_rf.csv
+!research/2026-07-31/topics_skills.csv
+!research/2026-07-31/skill_cooccurrence.csv
+!research/2026-07-31/missing_data.csv
+!research/2026-07-31/employment.csv
+!research/2026-07-31/salary.csv
+!research/2026-07-31/query_noise.csv
+!research/2026-07-31/top_skills.png
+!research/2026-07-31/publications_by_date.png

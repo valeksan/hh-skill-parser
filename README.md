@@ -111,6 +111,10 @@ hh-skill-parser retry --run-id 42 --max-attempts 3
 hh-skill-parser coverage --run-id 42
 ```
 
+`retry` использует source исходного запуска, если не указан `--source`. Для
+повторной загрузки только неуспешных карточек через другой transport передайте
+его явно, например `hh-skill-parser retry --run-id 42 --source api`.
+
 Чтобы найти ID прерванного запуска без прямого обращения к SQLite:
 
 ```bash

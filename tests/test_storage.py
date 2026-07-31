@@ -1193,6 +1193,33 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(counters["errors"], 0)
         self.assertEqual(calls, [("search", 0), ("detail", "broken"), ("detail", "123")])
 
+    def test_retry_explicit_source_overrides_frozen_run_source(self):
+        run_id = Collector(self.database).start({"source": "html"}, ["1"], source_policy="html")
+        self.database.upsert_vacancy("123", source="html")
+        self.database.record_error(
+            run_id, "vacancy", "HHHtmlAntiBotError", "blocked", vacancy_hh_id="123", source="html",
+        )
+        parser = build_research_parser()
+        received = []
+
+        class Source:
+            source_name = "api"
+            search_page = staticmethod(lambda *_args, **_kwargs: [])
+
+            @staticmethod
+            def detail(candidate):
+                return {"id": candidate["id"], "name": "Специалист"}
+
+        def source_factory(settings):
+            received.append(settings.source)
+            return Source()
+
+        counters = run_retry(parser.parse_args([
+            "retry", "--database", str(self.database.path), "--run-id", str(run_id), "--source", "api",
+        ]), source_factory=source_factory)
+        self.assertEqual(received, ["api"])
+        self.assertEqual(counters["errors"], 0)
+
     def test_date_window_is_persisted_and_reused_by_resume(self):
         collector = Collector(self.database)
         run_id = collector.start({"fixture": "dates"}, ["1"])

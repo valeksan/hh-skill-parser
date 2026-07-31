@@ -161,9 +161,13 @@ def load_frozen_query_specs(config: dict[str, Any], fallback_path: str | Path) -
     return result
 
 
-def add_transport_arguments(parser: argparse.ArgumentParser, *, html_source: bool = True) -> None:
+def add_transport_arguments(
+    parser: argparse.ArgumentParser, *, html_source: bool = True, source_default: str | None = "api",
+) -> None:
     """Add API connection options shared by collect and resume."""
-    parser.add_argument("--source", choices=["api", "html"] if html_source else ["api"], default="api")
+    parser.add_argument(
+        "--source", choices=["api", "html"] if html_source else ["api"], default=source_default,
+    )
     parser.add_argument("--access-token", default=os.environ.get("HH_ACCESS_TOKEN"))
     parser.add_argument("--token-file", help="OAuth token JSON written by auth login; never printed")
     parser.add_argument("--user-agent", default=os.environ.get("HH_USER_AGENT", DEFAULT_USER_AGENT))
@@ -242,7 +246,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_database_arguments(retry)
     retry.add_argument("--run-id", required=True, type=int)
     retry.add_argument("--max-attempts", type=nonnegative_int, default=3)
-    add_transport_arguments(retry)
+    # Unlike resume, retry may intentionally repair failed cards through a
+    # different transport.  None lets run_retry distinguish an omitted flag
+    # from an explicit --source api.
+    add_transport_arguments(retry, source_default=None)
 
     coverage = commands.add_parser("coverage", help="report persisted collection coverage; no network")
     coverage.add_argument("--config")
@@ -586,7 +593,8 @@ def run_retry(settings: argparse.Namespace, *, source_factory: Callable[[argpars
     config = database.run_config(settings.run_id)
     source = source_factory(argparse.Namespace(**{
         **vars(settings), "host": config.get("host", settings.host),
-        "locale": config.get("locale", settings.locale), "source": config.get("source", settings.source),
+        "locale": config.get("locale", settings.locale),
+        "source": settings.source if settings.source is not None else config.get("source", "api"),
     }))
     return Collector(
         database, transport=source, write_batch_size=config.get("write_batch_size", 1),

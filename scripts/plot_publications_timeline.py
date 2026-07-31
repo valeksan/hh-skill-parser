@@ -8,6 +8,9 @@ from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
@@ -16,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True, help="aggregate publication_trends CSV")
     parser.add_argument("--output", type=Path, required=True, help="destination PNG")
-    parser.add_argument("--label", default="Новосибирск", help="timezone label already used to aggregate input dates")
+    parser.add_argument("--label", default="все города (UTC)", help="label for the calendar used by the aggregate input")
     args = parser.parse_args()
 
     counts = Counter()

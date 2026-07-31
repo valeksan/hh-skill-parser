@@ -27,7 +27,7 @@
 
 - [top_skills.png](top_skills.png) — частота навыков по уникальным вакансиям.
 - [publications_by_date.png](publications_by_date.png) — дневная частота
-  релевантных публикаций в часовом поясе Новосибирска.
+  релевантных публикаций по всем городам; даты приведены к UTC.
 - `top_skills_rf.csv` и `topics_skills.csv` — частоты навыков и тематик.
 - `skill_cooccurrence.csv` — пары навыков в одной вакансии.
 - `publication_trends.csv` — дневной ряд в UTC из DA-витрины.
@@ -50,7 +50,7 @@ python scripts/plot_top_skills.py \
   --input research/2026-07-31/top_skills_rf.csv \
   --output research/2026-07-31/top_skills.png
 python scripts/plot_publications_timeline.py \
-  --input research/2026-07-31/publication_trends_novosibirsk.csv \
+  --input research/2026-07-31/publication_trends.csv \
   --output research/2026-07-31/publications_by_date.png \
-  --label Новосибирск
+  --label 'все города (UTC)'
 ```

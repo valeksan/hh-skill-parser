@@ -1,4 +1,4 @@
-# HH Mobilization Skills Research
+# Исследование навыков по вакансиям HH
 
 Сбор и анализ вакансий, связанных с мобилизационной подготовкой, воинским
 учётом, бронированием, ГО/ЧС и режимно-секретной работой.
@@ -49,7 +49,7 @@ hh-skill-parser collect --areas-file areas.txt
 # Каталог областей предварительно синхронизируется через API.
 hh-skill-parser collect --source html --area 1 --date-from 2026-01-01
 
-# Source payloads are not retained by default. Enable only for debugging.
+# Исходные ответы не сохраняются по умолчанию. Включайте их только для отладки.
 hh-skill-parser collect --source html --store-raw --area 1 --date-from 2026-01-01
 
 # Продолжение того же запуска после сбоя.
@@ -84,7 +84,7 @@ hh-skill-parser stats --snapshot latest --query-family military
 history и не меняет incremental watermark.
 `extract` по умолчанию обрабатывает latest snapshot каждой вакансии. Фильтры
 `--run-id`, `--area`, `--source`, `--date-from/--date-to` ограничивают выборку.
-Автоматические labels/features/skills не выполняются при `collect`/`resume`.
+Автоматическая разметка, расчёт признаков и извлечение навыков не выполняются при `collect`/`resume`.
 `export vacancies` поддерживает `--run-id`, `--area`, `--relevance`,
 `--query-family`, `--date-from/--date-to`; multivalue fields сохранены JSON-строками.
 `stats` использует те же фильтры, возвращает counts по relevance/source без сети.
@@ -111,7 +111,7 @@ hh-skill-parser retry --run-id 42 --max-attempts 3
 hh-skill-parser coverage --run-id 42
 ```
 
-To find an interrupted run ID without opening SQLite directly:
+Чтобы найти ID прерванного запуска без прямого обращения к SQLite:
 
 ```bash
 hh-skill-parser runs --status running
@@ -122,6 +122,38 @@ hh-skill-parser runs --status running
 HH: API pagination ограничена `--max-pages`, насыщенные интервалы режутся до
 `--date-slice-min-days`, а failed/saturated/missing cards остаются видимыми в
 coverage и errors. `degraded`/partial run нельзя считать полным корпусом.
+
+## Правовые риски и ограничения использования данных
+
+Этот проект предназначен для внутреннего исследовательского и аналитического
+использования. Он не предоставляет разрешения на сбор, передачу, публикацию или
+коммерческое использование данных HH.ru. Этот раздел не является юридической
+консультацией: перед запуском публичного или коммерческого сервиса получите
+письменное разрешение правообладателя и заключение юриста по вашей модели работы.
+
+Не публикуйте открыто SQLite-базу, резервные копии, raw HTML/JSON, полные тексты
+вакансий, массовые выгрузки карточек, контакты или точные адреса. Даже если
+информация была доступна на странице HH.ru, её повторное распространение и
+массовое извлечение могут требовать отдельного правового основания и разрешения
+правообладателя. В частности:
+
+- изготовитель базы данных обладает исключительным правом на извлечение и
+  последующее использование существенной части материалов базы: [статья 1334
+  ГК РФ](https://www.consultant.ru/document/cons_doc_LAW_64629/c8b26358cbae2a98f328bd8cb495a08f7e11caff/);
+- ФИО, телефон, email и иные сведения о физическом лице могут быть персональными
+  данными. Для их распространения действуют специальные требования, а субъект
+  вправе потребовать прекратить распространение: [статья 10.1 Федерального
+  закона № 152-ФЗ](https://www.consultant.ru/document/cons_doc_LAW_61801/591acc70f577873c1ee54765eda110b7a0271eaf/);
+- оператор, собирающий персональные данные через сайт, обязан обеспечить меры
+  защиты и доступность политики обработки персональных данных: [статья 18.1
+  Федерального закона № 152-ФЗ](https://www.consultant.ru/document/cons_doc_LAW_61801/eeeebe22bf738fd65bb66b95cc278911ae2525ee/).
+
+Для публичного сайта безопаснее ограничиться агрегированной обезличенной
+аналитикой: статистикой навыков, периодов, регионов и зарплатных диапазонов, с
+датой обновления и ссылкой на исходную вакансию. Не показывайте полный текст,
+контактные данные и не позволяйте скачивать сырые данные. Соблюдайте также
+[условия использования HH.ru](https://hh.ru/article/33121), настройте ограничение
+доступа к БД, сроки хранения и процесс удаления данных по обращениям.
 
 ## Офлайн-переобработка и ручная проверка
 
@@ -268,10 +300,11 @@ hh-skill-parser maintenance --database hh_mobilization.sqlite3 inspect-raw \
 sqlite3 hh_mobilization.sqlite3 'SELECT COUNT(*), COALESCE(SUM(raw_size), 0) FROM vacancy_snapshots WHERE raw_payload IS NOT NULL;'
 ```
 
-## Backup и recovery
+## Резервное копирование и восстановление
 
-Backup делает WAL checkpoint, SQLite-consistent copy и `integrity_check`. Backup
-и restore не перезаписывают файл по умолчанию. Restore всегда идёт в отдельный
+Резервное копирование выполняет контрольную точку WAL, согласованное копирование
+SQLite и `integrity_check`. Резервное копирование и восстановление не
+перезаписывают файл по умолчанию. Восстановление всегда идёт в отдельный
 путь и проверяется до/после копирования:
 
 ```bash
@@ -283,7 +316,7 @@ hh-skill-parser db --database restored/hh.sqlite3 check
 `--overwrite` у `db restore` заменяет уже существующий restore output; исходный
 backup не меняется.
 
-## Live smoke
+## Проверочный сетевой запрос
 
 Обычный test suite не вызывает HH. Только явный opt-in smoke делает один API
 search (`per_page=1`), timeout максимум 10 секунд, retries выключены, SQLite не
@@ -313,10 +346,11 @@ hh-skill-parser db --database hh_mobilization.sqlite3 check
 
 ### `query_specs.toml`
 
-Default DB-backed collector uses versioned query specs. Each query keeps HH
-expression unchanged and explicitly selects `name`, `description`, or both.
-This makes exact title roles and broad thematic corpus separate, without forced
-outer quotes.
+Сборщик, работающий через SQLite, использует версионируемые спецификации
+поисковых запросов. Каждый запрос сохраняет выражение HH без изменений и явно
+выбирает поле `name`, `description` или оба поля. Поэтому точные запросы по
+названиям должностей и широкий тематический корпус остаются разделёнными, без
+принудительных внешних кавычек.
 
 ```toml
 version = "2026-07-30"
@@ -348,25 +382,26 @@ purpose = "broad corpus"
 
 Первый элемент — каноническое название в итоговом CSV. Все варианты после `|` считаются тем же навыком; в одной вакансии он учитывается один раз. Одиночные строки также допустимы.
 
-Alias объединяет только варианты одного навыка. Смежные сущности, например воинский учёт и бронирование, остаются разными строками статистики.
+Псевдоним объединяет только варианты одного навыка. Смежные сущности, например воинский учёт и бронирование, остаются разными строками статистики.
 
 ## Результаты
 
-- `hh_mobilization.sqlite3` — source of truth для DB-backed сбора;
-- `marts/` — воспроизводимый DA bundle с `manifest.json`;
-- `marts/top_skills_rf.csv` — SQLite-derived compatibility export навыков.
+- `hh_mobilization.sqlite3` — основной источник данных для сбора через SQLite;
+- `marts/` — воспроизводимый набор аналитических витрин с `manifest.json`;
+- `marts/top_skills_rf.csv` — совместимый экспорт навыков, сформированный из SQLite.
 
 ## Фильтрация
 
-DB-backed collector сохраняет каждый query hit до загрузки карточки и не делает
-title-only rejection. Relevance/features/skills вычисляются отдельными offline
-командами.
+Сборщик, работающий через SQLite, сохраняет каждое попадание поиска до загрузки
+карточки и не отклоняет вакансию только по названию. Релевантность, признаки и
+навыки вычисляются отдельными офлайн-командами.
 
 ## Сеть и ограничения HH
 
-DB-backed collector uses public `https://api.hh.ru` JSON API with one
-`HH-User-Agent`, optional Bearer token, gzip and bounded transient retries.
-Invalid token is removed after one auth event; run continues unauthenticated.
+Сборщик, работающий через SQLite, использует публичный JSON API
+`https://api.hh.ru`, один `HH-User-Agent`, необязательный токен Bearer, gzip и
+ограниченное число повторов временных ошибок. После одной ошибки авторизации
+недействительный токен отключается, а запуск продолжается без аутентификации.
 
 Сорок запросов по десяти зонам — длительный сбор. Для продолжения используйте
 `hh-skill-parser resume --run-id RUN_ID`.
